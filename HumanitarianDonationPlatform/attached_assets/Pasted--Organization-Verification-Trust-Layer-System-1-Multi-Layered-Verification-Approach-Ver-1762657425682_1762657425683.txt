@@ -1,0 +1,998 @@
+# Organization Verification & Trust Layer System
+
+## 1. Multi-Layered Verification Approach
+
+### Verification Levels
+
+```yaml
+Level 1 - Basic Verification (Required):
+  - Legal registration confirmed
+  - Tax-exempt status verified (501c3 or equivalent)
+  - Basic contact information validated
+  - Bank account verified (via Stripe Connect)
+  Time: 1-3 days
+  
+Level 2 - Enhanced Verification (Recommended):
+  - Third-party ratings integrated (Charity Navigator, GuideStar)
+  - Financial transparency score calculated
+  - Ground presence confirmed
+  - References checked
+  Time: 1-2 weeks
+  
+Level 3 - Premium Verification (Optional):
+  - On-site visit or video verification
+  - Impact measurement system audited
+  - Beneficiary testimonials collected
+  - Partnership with major NGOs confirmed
+  Time: 2-4 weeks
+```
+
+---
+
+## 2. Technology Stack
+
+```yaml
+Core Services:
+  Backend: Node.js + Express (or Python FastAPI)
+  Database: PostgreSQL (organization data, verification history)
+  Document Storage: AWS S3 or Google Cloud Storage
+  OCR: Google Cloud Vision API (document scanning)
+  
+Third-Party Integrations:
+  Charity Navigator API: Ratings and financial data
+  GuideStar/Candid API: 501(c)(3) verification
+  IRS Tax Exempt Organization Search: Tax status
+  OpenCorporates API: Legal registration lookup
+  ProPublica Nonprofit Explorer: Form 990 data
+  
+Verification Tools:
+  Stripe Identity: For organization representative verification
+  Plaid: Bank account verification (alternative to Stripe)
+  Trulioo: Global identity verification
+  Onfido: Document verification and KYC
+  
+AI/ML:
+  GPT-4 Vision: Document analysis and fraud detection
+  Claude API: Risk assessment and red flag detection
+  Custom ML: Anomaly detection in financial data
+  
+Monitoring:
+  Sentry: Error tracking
+  Datadog: Performance monitoring
+  Mixpanel: Verification funnel analytics
+```
+
+---
+
+## 3. Verification Data Sources
+
+### 3.1 Third-Party Rating Services
+
+#### Charity Navigator Integration
+
+```javascript
+// services/charity_navigator_service.js
+const axios = require('axios');
+
+class CharityNavigatorService {
+  constructor(apiKey) {
+    this.apiKey = apiKey;
+    this.baseUrl = 'https://api.charitynavigator.org/v2';
+  }
+
+  async searchOrganization(ein) {
+    /**
+     * Search by EIN (Tax ID)
+     */
+    try {
+      const response = await axios.get(`${this.baseUrl}/Organizations`, {
+        params: {
+          app_id: process.env.CHARITY_NAV_APP_ID,
+          app_key: this.apiKey,
+          ein: ein
+        }
+      });
+
+      if (response.data.length === 0) {
+        return null;
+      }
+
+      const org = response.data[0];
+
+      return {
+        charity_navigator_id: org.charityNavigatorURL,
+        overall_rating: org.currentRating?.rating || null,
+        overall_score: org.currentRating?.score || null,
+        financial_rating: org.currentRating?.financialRating?.rating || null,
+        accountability_rating: org.currentRating?.accountabilityRating?.rating || null,
+        culture_rating: org.currentRating?.cultureRating?.rating || null,
+        category: org.category?.categoryName,
+        cause: org.cause?.causeName,
+        mission: org.mission,
+        website: org.websiteURL,
+        logo_url: org.logoURL,
+        address: org.mailingAddress,
+        last_updated: org.currentRating?.ratingDate
+      };
+    } catch (error) {
+      console.error('Charity Navigator API error:', error);
+      return null;
+    }
+  }
+
+  async getFinancialData(charityId) {
+    /**
+     * Get detailed financial information
+     */
+    try {
+      const response = await axios.get(
+        `${this.baseUrl}/Organizations/${charityId}`,
+        {
+          params: {
+            app_id: process.env.CHARITY_NAV_APP_ID,
+            app_key: this.apiKey
+          }
+        }
+      );
+
+      const financial = response.data.irsClassification?.financialData;
+
+      return {
+        total_revenue: financial?.totalRevenue,
+        total_expenses: financial?.totalExpenses,
+        program_expenses: financial?.programExpenses,
+        administrative_expenses: financial?.administrativeExpenses,
+        fundraising_expenses: financial?.fundraisingExpenses,
+        program_expense_percentage: this.calculateProgramPercentage(financial),
+        overhead_percentage: this.calculateOverheadPercentage(financial),
+        working_capital: financial?.workingCapital,
+        fiscal_year_end: financial?.fiscalYearEnd
+      };
+    } catch (error) {
+      console.error('Error fetching financial data:', error);
+      return null;
+    }
+  }
+
+  calculateProgramPercentage(financial) {
+    if (!financial?.totalExpenses || !financial?.programExpenses) return null;
+    return (financial.programExpenses / financial.totalExpenses) * 100;
+  }
+
+  calculateOverheadPercentage(financial) {
+    if (!financial?.totalExpenses) return null;
+    const overhead = 
+      (financial.administrativeExpenses || 0) + 
+      (financial.fundraisingExpenses || 0);
+    return (overhead / financial.totalExpenses) * 100;
+  }
+}
+
+module.exports = CharityNavigatorService;
+```
+
+#### GuideStar/Candid Integration
+
+```javascript
+// services/guidestar_service.js
+const axios = require('axios');
+
+class GuideStarService {
+  constructor(apiKey) {
+    this.apiKey = apiKey;
+    this.baseUrl = 'https://api.guidestar.org/v2';
+  }
+
+  async verifyNonprofit(ein) {
+    /**
+     * Verify 501(c)(3) status and get organization details
+     */
+    try {
+      const response = await axios.get(
+        `${this.baseUrl}/organizations/${ein.replace(/-/g, '')}`,
+        {
+          headers: {
+            'Authorization': `Bearer ${this.apiKey}`,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+
+      const org = response.data;
+
+      return {
+        verified: true,
+        organization_name: org.organization_name,
+        ein: org.ein,
+        ntee_code: org.ntee_code, // National Taxonomy of Exempt Entities
+        subsection_code: org.subsection_code, // 501(c)(3), etc.
+        affiliation: org.affiliation,
+        classification: org.classification,
+        deductibility_code: org.deductibility_code,
+        foundation_code: org.foundation_code,
+        activity_codes: org.activity_codes,
+        organization_code: org.organization_code,
+        exempt_status: org.exempt_status,
+        tax_period: org.tax_period,
+        asset_code: org.asset_code,
+        income_code: org.income_code,
+        filing_requirement: org.filing_requirement,
+        pf_filing_requirement: org.pf_filing_requirement,
+        accounting_period: org.accounting_period,
+        asset_amount: org.asset_amount,
+        income_amount: org.income_amount,
+        revenue_amount: org.revenue_amount,
+        address: {
+          street: org.street,
+          city: org.city,
+          state: org.state,
+          zip: org.zip,
+          country: org.country
+        }
+      };
+    } catch (error) {
+      if (error.response?.status === 404) {
+        return {
+          verified: false,
+          error: 'Organization not found in GuideStar database'
+        };
+      }
+      console.error('GuideStar API error:', error);
+      throw error;
+    }
+  }
+
+  async getSealOfTransparency(ein) {
+    /**
+     * Check if organization has GuideStar Seal of Transparency
+     */
+    try {
+      const response = await axios.get(
+        `${this.baseUrl}/organizations/${ein.replace(/-/g, '')}/seal`,
+        {
+          headers: {
+            'Authorization': `Bearer ${this.apiKey}`
+          }
+        }
+      );
+
+      return {
+        has_seal: response.data.seal_status === 'active',
+        seal_level: response.data.seal_level, // Bronze, Silver, Gold, Platinum
+        seal_url: response.data.seal_url,
+        profile_url: response.data.profile_url,
+        last_updated: response.data.last_updated
+      };
+    } catch (error) {
+      return { has_seal: false };
+    }
+  }
+}
+
+module.exports = GuideStarService;
+```
+
+#### IRS Tax-Exempt Organization Search
+
+```javascript
+// services/irs_verification_service.js
+const axios = require('axios');
+const cheerio = require('cheerio');
+
+class IRSVerificationService {
+  /**
+   * Scrape IRS Tax Exempt Organization Search
+   * Note: IRS doesn't have official API, so we scrape their search tool
+   */
+
+  async verifyTaxExemptStatus(ein) {
+    try {
+      // IRS Tax Exempt Organization Search
+      const url = 'https://apps.irs.gov/app/eos/';
+      
+      const response = await axios.post(url, {
+        ein: ein.replace(/-/g, ''),
+        names: '',
+        city: '',
+        state: '',
+        country: '',
+        deductibility: '',
+        statusCode: '',
+        organization: '',
+        sortColumn: 'name',
+        isDescending: false
+      }, {
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded'
+        }
+      });
+
+      const $ = cheerio.load(response.data);
+      
+      // Parse results
+      const result = {};
+      $('table.eoResultsTable tr').each((i, row) => {
+        if (i === 0) return; // Skip header
+        
+        const cells = $(row).find('td');
+        result.ein = $(cells[0]).text().trim();
+        result.name = $(cells[1]).text().trim();
+        result.city = $(cells[2]).text().trim();
+        result.state = $(cells[3]).text().trim();
+        result.country = $(cells[4]).text().trim();
+        result.deductibility = $(cells[5]).text().trim();
+      });
+
+      if (!result.ein) {
+        return {
+          verified: false,
+          error: 'EIN not found in IRS database'
+        };
+      }
+
+      return {
+        verified: true,
+        is_501c3: result.deductibility.includes('501(c)(3)'),
+        ...result
+      };
+    } catch (error) {
+      console.error('IRS verification error:', error);
+      return {
+        verified: false,
+        error: 'Unable to verify with IRS'
+      };
+    }
+  }
+}
+
+module.exports = IRSVerificationService;
+```
+
+---
+
+## 4. Document Verification System
+
+### 4.1 Document Upload & OCR
+
+```javascript
+// services/document_verification_service.js
+const vision = require('@google-cloud/vision');
+const { Storage } = require('@google-cloud/storage');
+const Anthropic = require('@anthropic-ai/sdk');
+
+class DocumentVerificationService {
+  constructor() {
+    this.visionClient = new vision.ImageAnnotatorClient();
+    this.storage = new Storage();
+    this.anthropic = new Anthropic({
+      apiKey: process.env.ANTHROPIC_API_KEY
+    });
+  }
+
+  async verifyDocument(organizationId, documentType, fileBuffer) {
+    /**
+     * Verify uploaded documents using OCR and AI analysis
+     * documentType: 'irs_determination_letter', 'form_990', 'bank_statement', etc.
+     */
+
+    // Upload to cloud storage
+    const fileUrl = await this.uploadDocument(organizationId, documentType, fileBuffer);
+
+    // Perform OCR
+    const ocrResult = await this.performOCR(fileBuffer);
+
+    // Analyze with Claude
+    const analysis = await this.analyzeDocument(documentType, ocrResult.text);
+
+    // Store verification result
+    await this.storeVerificationResult(organizationId, {
+      document_type: documentType,
+      file_url: fileUrl,
+      ocr_text: ocrResult.text,
+      analysis: analysis,
+      verified: analysis.is_valid,
+      confidence: analysis.confidence,
+      extracted_data: analysis.extracted_data
+    });
+
+    return {
+      verified: analysis.is_valid,
+      confidence: analysis.confidence,
+      extracted_data: analysis.extracted_data,
+      issues: analysis.issues
+    };
+  }
+
+  async performOCR(fileBuffer) {
+    /**
+     * Extract text from document using Google Cloud Vision
+     */
+    const [result] = await this.visionClient.textDetection(fileBuffer);
+    const detections = result.textAnnotations;
+
+    if (!detections || detections.length === 0) {
+      return {
+        success: false,
+        text: '',
+        error: 'No text detected in document'
+      };
+    }
+
+    return {
+      success: true,
+      text: detections[0].description,
+      blocks: detections.slice(1)
+    };
+  }
+
+  async analyzeDocument(documentType, ocrText) {
+    /**
+     * Use Claude to analyze document and extract key information
+     */
+
+    const prompts = {
+      irs_determination_letter: `Analyze this IRS Determination Letter and extract:
+1. Organization name
+2. EIN (Employer Identification Number)
+3. Determination date
+4. Tax-exempt status (501(c)(3), etc.)
+5. Whether it's currently valid
+6. Any red flags or issues
+
+Document text:
+${ocrText}
+
+Respond in JSON format:
+{
+  "is_valid": boolean,
+  "confidence": 0.0-1.0,
+  "extracted_data": {
+    "organization_name": "...",
+    "ein": "...",
+    "determination_date": "YYYY-MM-DD",
+    "tax_status": "501(c)(3)",
+    "is_current": boolean
+  },
+  "issues": ["List any red flags or concerns"]
+}`,
+
+      form_990: `Analyze this Form 990 tax return and extract:
+1. Organization name and EIN
+2. Tax year
+3. Total revenue
+4. Total expenses
+5. Program service expenses
+6. Administrative expenses
+7. Fundraising expenses
+8. Net assets
+9. Any unusual items or red flags
+
+Document text:
+${ocrText}
+
+Respond in JSON format with financial data and analysis.`,
+
+      bank_statement: `Analyze this bank statement to verify:
+1. Account holder matches organization name
+2. Account is in good standing
+3. Regular transaction activity
+4. No suspicious patterns
+5. Sufficient balance
+
+Document text:
+${ocrText}`
+    };
+
+    const prompt = prompts[documentType] || `Analyze this document:\n${ocrText}`;
+
+    try {
+      const response = await this.anthropic.messages.create({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 2000,
+        temperature: 0.1,
+        messages: [{
+          role: 'user',
+          content: prompt
+        }]
+      });
+
+      const analysisText = response.content[0].text;
+      
+      // Extract JSON from response
+      let analysis;
+      try {
+        analysis = JSON.parse(analysisText);
+      } catch (e) {
+        // Try to extract JSON from markdown code block
+        const jsonMatch = analysisText.match(/```json\n([\s\S]+?)\n```/);
+        if (jsonMatch) {
+          analysis = JSON.parse(jsonMatch[1]);
+        } else {
+          throw new Error('Could not parse analysis response');
+        }
+      }
+
+      return analysis;
+    } catch (error) {
+      console.error('Document analysis error:', error);
+      return {
+        is_valid: false,
+        confidence: 0,
+        extracted_data: {},
+        issues: ['Error analyzing document']
+      };
+    }
+  }
+
+  async uploadDocument(organizationId, documentType, fileBuffer) {
+    const bucket = this.storage.bucket(process.env.VERIFICATION_DOCS_BUCKET);
+    const fileName = `organizations/${organizationId}/verification/${documentType}_${Date.now()}.pdf`;
+    const file = bucket.file(fileName);
+
+    await file.save(fileBuffer, {
+      metadata: {
+        contentType: 'application/pdf'
+      }
+    });
+
+    return `gs://${process.env.VERIFICATION_DOCS_BUCKET}/${fileName}`;
+  }
+
+  async storeVerificationResult(organizationId, result) {
+    await db.query(`
+      INSERT INTO verification_documents (
+        organization_id, document_type, file_url, ocr_text,
+        analysis, verified, confidence, extracted_data, created_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+    `, [
+      organizationId,
+      result.document_type,
+      result.file_url,
+      result.ocr_text,
+      JSON.stringify(result.analysis),
+      result.verified,
+      result.confidence,
+      JSON.stringify(result.extracted_data)
+    ]);
+  }
+}
+
+module.exports = DocumentVerificationService;
+```
+
+---
+
+## 5. Automated Verification Pipeline
+
+### 5.1 Multi-Step Verification Process
+
+```javascript
+// services/verification_pipeline.js
+
+class VerificationPipeline {
+  constructor() {
+    this.charityNav = new CharityNavigatorService(process.env.CHARITY_NAV_KEY);
+    this.guideStar = new GuideStarService(process.env.GUIDESTAR_KEY);
+    this.irsVerification = new IRSVerificationService();
+    this.documentVerification = new DocumentVerificationService();
+  }
+
+  async verifyOrganization(organizationId) {
+    /**
+     * Run complete verification pipeline
+     */
+    console.log(`🔍 Starting verification for organization ${organizationId}`);
+
+    const organization = await this.getOrganization(organizationId);
+    const results = {
+      organization_id: organizationId,
+      started_at: new Date(),
+      steps: []
+    };
+
+    try {
+      // Step 1: Basic Information Validation
+      console.log('Step 1: Validating basic information...');
+      const basicValidation = await this.validateBasicInfo(organization);
+      results.steps.push(basicValidation);
+
+      if (!basicValidation.passed) {
+        return this.failVerification(organizationId, 'Basic validation failed', results);
+      }
+
+      // Step 2: IRS Tax-Exempt Status
+      console.log('Step 2: Verifying IRS tax-exempt status...');
+      const irsVerification = await this.irsVerification.verifyTaxExemptStatus(organization.ein);
+      results.steps.push({
+        name: 'IRS Verification',
+        passed: irsVerification.verified && irsVerification.is_501c3,
+        data: irsVerification
+      });
+
+      if (!irsVerification.verified || !irsVerification.is_501c3) {
+        return this.failVerification(organizationId, 'Not a valid 501(c)(3)', results);
+      }
+
+      // Step 3: GuideStar Verification
+      console.log('Step 3: Checking GuideStar...');
+      const guideStarData = await this.guideStar.verifyNonprofit(organization.ein);
+      results.steps.push({
+        name: 'GuideStar Verification',
+        passed: guideStarData.verified,
+        data: guideStarData
+      });
+
+      // Step 4: Charity Navigator Rating
+      console.log('Step 4: Fetching Charity Navigator rating...');
+      const charityNavData = await this.charityNav.searchOrganization(organization.ein);
+      results.steps.push({
+        name: 'Charity Navigator',
+        passed: charityNavData !== null,
+        data: charityNavData
+      });
+
+      // Step 5: Document Verification
+      console.log('Step 5: Verifying uploaded documents...');
+      const docVerification = await this.verifyDocuments(organizationId);
+      results.steps.push(docVerification);
+
+      if (!docVerification.passed) {
+        return this.failVerification(organizationId, 'Document verification failed', results);
+      }
+
+      // Step 6: Bank Account Verification (via Stripe Connect)
+      console.log('Step 6: Verifying bank account...');
+      const bankVerification = await this.verifyBankAccount(organizationId);
+      results.steps.push(bankVerification);
+
+      if (!bankVerification.passed) {
+        return this.failVerification(organizationId, 'Bank verification failed', results);
+      }
+
+      // Step 7: Website & Contact Verification
+      console.log('Step 7: Verifying website and contact info...');
+      const contactVerification = await this.verifyContactInfo(organization);
+      results.steps.push(contactVerification);
+
+      // Step 8: Risk Assessment
+      console.log('Step 8: Running risk assessment...');
+      const riskAssessment = await this.assessRisk(organization, results);
+      results.risk_assessment = riskAssessment;
+
+      // Calculate overall verification level
+      const verificationLevel = this.calculateVerificationLevel(results);
+      results.verification_level = verificationLevel;
+      results.completed_at = new Date();
+
+      // Update organization record
+      await this.updateOrganizationVerification(organizationId, {
+        verification_status: verificationLevel >= 2 ? 'verified' : 'pending_review',
+        verification_level: verificationLevel,
+        verification_data: results,
+        charity_navigator_rating: charityNavData?.overall_rating,
+        guidestar_verified: guideStarData?.verified,
+        last_verified: new Date()
+      });
+
+      console.log(`✅ Verification complete! Level: ${verificationLevel}`);
+
+      return {
+        success: true,
+        verification_level: verificationLevel,
+        results: results
+      };
+
+    } catch (error) {
+      console.error('Verification pipeline error:', error);
+      return this.failVerification(organizationId, error.message, results);
+    }
+  }
+
+  async validateBasicInfo(organization) {
+    const issues = [];
+
+    if (!organization.name || organization.name.length < 3) {
+      issues.push('Invalid organization name');
+    }
+
+    if (!organization.ein || !/^\d{2}-?\d{7}$/.test(organization.ein)) {
+      issues.push('Invalid EIN format');
+    }
+
+    if (!organization.website || !this.isValidUrl(organization.website)) {
+      issues.push('Invalid or missing website');
+    }
+
+    if (!organization.email || !this.isValidEmail(organization.email)) {
+      issues.push('Invalid or missing email');
+    }
+
+    if (!organization.address || !organization.city || !organization.state) {
+      issues.push('Incomplete address information');
+    }
+
+    return {
+      name: 'Basic Information Validation',
+      passed: issues.length === 0,
+      issues: issues
+    };
+  }
+
+  async verifyDocuments(organizationId) {
+    const documents = await db.query(`
+      SELECT document_type, verified, confidence
+      FROM verification_documents
+      WHERE organization_id = $1
+      ORDER BY created_at DESC
+    `, [organizationId]);
+
+    const required = ['irs_determination_letter', 'form_990'];
+    const uploaded = documents.rows.map(d => d.document_type);
+    const missing = required.filter(r => !uploaded.includes(r));
+
+    if (missing.length > 0) {
+      return {
+        name: 'Document Verification',
+        passed: false,
+        issues: [`Missing required documents: ${missing.join(', ')}`]
+      };
+    }
+
+    const verified = documents.rows.filter(d => d.verified && d.confidence > 0.7);
+
+    return {
+      name: 'Document Verification',
+      passed: verified.length >= required.length,
+      data: {
+        total_documents: documents.rows.length,
+        verified_documents: verified.length
+      }
+    };
+  }
+
+  async verifyBankAccount(organizationId) {
+    // Check Stripe Connect account status
+    const org = await this.getOrganization(organizationId);
+
+    if (!org.stripe_account_id) {
+      return {
+        name: 'Bank Account Verification',
+        passed: false,
+        issues: ['Stripe Connect account not set up']
+      };
+    }
+
+    try {
+      const account = await stripe.accounts.retrieve(org.stripe_account_id);
+
+      return {
+        name: 'Bank Account Verification',
+        passed: account.payouts_enabled && account.charges_enabled,
+        data: {
+          charges_enabled: account.charges_enabled,
+          payouts_enabled: account.payouts_enabled,
+          details_submitted: account.details_submitted
+        }
+      };
+    } catch (error) {
+      return {
+        name: 'Bank Account Verification',
+        passed: false,
+        issues: ['Error verifying Stripe account']
+      };
+    }
+  }
+
+  async verifyContactInfo(organization) {
+    const issues = [];
+
+    // Verify website is accessible
+    try {
+      const response = await axios.get(organization.website, { timeout: 10000 });
+      if (response.status !== 200) {
+        issues.push('Website not accessible');
+      }
+    } catch (error) {
+      issues.push('Website verification failed');
+    }
+
+    // Verify email domain matches website domain
+    const emailDomain = organization.email.split('@')[1];
+    const websiteDomain = new URL(organization.website).hostname.replace('www.', '');
+
+    if (emailDomain !== websiteDomain) {
+      // Not necessarily a failure, but noted
+      issues.push('Email domain does not match website (may be valid)');
+    }
+
+    return {
+      name: 'Contact Information Verification',
+      passed: issues.length === 0,
+      issues: issues,
+      warnings: issues.length > 0 ? issues : []
+    };
+  }
+
+  async assessRisk(organization, verificationResults) {
+    /**
+     * Use AI to assess overall risk level
+     */
+
+    const prompt = `Assess the risk level of this nonprofit organization applying to receive donations.
+
+Organization Details:
+- Name: ${organization.name}
+- EIN: ${organization.ein}
+- Website: ${organization.website}
+- Years Operating: ${organization.years_operating || 'Unknown'}
+
+Verification Results:
+${JSON.stringify(verificationResults.steps, null, 2)}
+
+Assess risk based on:
+1. Completeness of verification
+2. Third-party ratings
+3. Financial transparency
+4. Red flags or inconsistencies
+5. Overall legitimacy
+
+Respond in JSON:
+{
+  "risk_level": "low|medium|high",
+  "risk_score": 0.0-1.0,
+  "concerns": ["List specific concerns"],
+  "strengths": ["List positive factors"],
+  "recommendation": "approve|review|reject",
+  "reasoning": "Explanation"
+}`;
+
+    try {
+      const response = await this.anthropic.messages.create({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 1500,
+        temperature: 0.2,
+        messages: [{ role: 'user', content: prompt }]
+      });
+
+      const text = response.content[0].text;
+      let assessment;
+      
+      try {
+        assessment = JSON.parse(text);
+      } catch (e) {
+        const jsonMatch = text.match(/```json\n([\s\S]+?)\n```/);
+        if (jsonMatch) {
+          assessment = JSON.parse(jsonMatch[1]);
+        } else {
+          throw new Error('Could not parse risk assessment');
+        }
+      }
+
+      return assessment;
+    } catch (error) {
+      console.error('Risk assessment error:', error);
+      return {
+        risk_level: 'high',
+        risk_score: 1.0,
+        concerns: ['Unable to complete risk assessment'],
+        recommendation: 'review'
+      };
+    }
+  }
+
+  calculateVerificationLevel(results) {
+    /**
+     * Calculate verification level (1-3) based on completed steps
+     */
+    let score = 0;
+
+    // Basic requirements (Level 1)
+    const basicPassed = results.steps.filter(s => 
+      ['Basic Information Validation', 'IRS Verification', 'Bank Account Verification']
+        .includes(s.name) && s.passed
+    ).length;
+
+    if (basicPassed >= 3) score = 1;
+
+    // Enhanced verification (Level 2)
+    const enhancedPassed = results.steps.filter(s =>
+      ['GuideStar Verification', 'Charity Navigator', 'Document Verification']
+        .includes(s.name) && s.passed
+    ).length;
+
+    if (score >= 1 && enhancedPassed >= 2) score = 2;
+
+    // Premium verification (Level 3)
+    const charityNavRating = results.steps.find(s => s.name === 'Charity Navigator')?.data?.overall_rating;
+    const riskLevel = results.risk_assessment?.risk_level;
+
+    if (score >= 2 && charityNavRating >= 3 && riskLevel === 'low') {
+      score = 3;
+    }
+
+    return score;
+  }
+
+  async failVerification(organizationId, reason, results) {
+    await this.updateOrganizationVerification(organizationId, {
+      verification_status: 'failed',
+      verification_data: results,
+      failure_reason: reason,
+      last_verified: new Date()
+    });
+
+    return {
+      success: false,
+      reason: reason,
+      results: results
+    };
+  }
+
+  async getOrganization(organizationId) {
+    const result = await db.query(
+      'SELECT * FROM organizations WHERE id = $1',
+      [organizationId]
+    );
+    return result.rows[0];
+  }
+
+  async updateOrganizationVerification(organizationId, data) {
+    await db.query(`
+      UPDATE organizations
+      SET 
+        verification_status = $2,
+        verification_level = $3,
+        verification_data = $4,
+        charity_navigator_rating = $5,
+        guidestar_verified = $6,
+        last_verified = $7,
+        updated_at = NOW()
+      WHERE id = $1
+    `, [
+      organizationId,
+      data.verification_status,
+      data.verification_level,
+      data.verification_data,
+      data.charity_navigator_rating,
+      data.guidestar_verified,
+      data.last_verified
+    ]);
+  }
+
+  isValidUrl(string) {
+    try {
+      new URL(string);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  isValidEmail(email) {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+  }
+}
+
+module.exports = VerificationPipeline;
+```
+
+---
+
+## 6. Trust Score Calculation
+
+```javascript
+// services/trust_score_service.js
+
+class TrustScoreService {
+  /**
+   * Calculate comprehensive trust score (0-100)
+   */
+
+  async calculateTrustScore(organizationId) {
+    const org = await this.getOrganizationData(organizationId);
+    
+    let score = 0;
+    const breakdown = {};
+
+    // 1. Third-Party Ratings (30 points)
+    breakdown.ratings = this.scoreRatings(org);

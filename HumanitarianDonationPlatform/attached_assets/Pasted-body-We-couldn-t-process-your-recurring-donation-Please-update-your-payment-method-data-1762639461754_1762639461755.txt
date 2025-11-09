@@ -1,0 +1,2636 @@
+body: 'We couldn\'t process your recurring donation. Please update your payment method.',
+      data: { type: 'subscription_payment_failed', subscription_id: subscriptionId }
+    });
+  }
+}
+
+async function handleSubscriptionCancelled(subscription) {
+  await db.query(`
+    UPDATE recurring_donations
+    SET status = 'cancelled', cancelled_at = NOW()
+    WHERE stripe_subscription_id = $1
+  `, [subscription.id]);
+
+  console.log(`✓ Subscription cancelled: ${subscription.id}`);
+}
+
+async function handleAccountUpdate(account) {
+  // Update organization's payout capability status
+  await db.query(`
+    UPDATE organizations
+    SET 
+      stripe_charges_enabled = $2,
+      stripe_payouts_enabled = $3,
+      stripe_onboarding_completed = $4,
+      updated_at = NOW()
+    WHERE stripe_account_id = $1
+  `, [
+    account.id,
+    account.charges_enabled,
+    account.payouts_enabled,
+    account.details_submitted
+  ]);
+}
+
+async function handleTransferPaid(transfer) {
+  // Record payout completion
+  await db.query(`
+    INSERT INTO payouts (
+      organization_id, stripe_transfer_id, amount, currency, status, paid_at
+    )
+    SELECT 
+      id, $1, $2, $3, 'completed', NOW()
+    FROM organizations
+    WHERE stripe_account_id = $4
+  `, [transfer.id, transfer.amount / 100, transfer.currency, transfer.destination]);
+}
+
+module.exports = router;
+```
+
+---
+
+## 8. Mobile SDK Integration (React Native)
+
+### 8.1 Setup
+
+```bash
+npm install @stripe/stripe-react-native
+```
+
+```javascript
+// App.js
+import { StripeProvider } from '@stripe/stripe-react-native';
+
+export default function App() {
+  return (
+    <StripeProvider
+      publishableKey={process.env.STRIPE_PUBLISHABLE_KEY}
+      merchantIdentifier="merchant.com.yourapp" // For Apple Pay
+    >
+      <NavigationContainer>
+        {/* Your app */}
+      </NavigationContainer>
+    </StripeProvider>
+  );
+}
+```
+
+### 8.2 Donation Screen
+
+```javascript
+// screens/DonationScreen.js
+import React, { useState } from 'react';
+import { View, StyleSheet, Alert } from 'react-native';
+import { Text, Button, TextInput, RadioButton } from 'react-native-paper';
+import { CardField, useStripe } from '@stripe/stripe-react-native';
+
+export default function DonationScreen({ route, navigation }) {
+  const { organizationId, organizationName } = route.params;
+  const { createPaymentMethod, confirmPayment } = useStripe();
+
+  const [amount, setAmount] = useState('');
+  const [donationType, setDonationType] = useState('one_time'); // one_time, recurring
+  const [cardComplete, setCardComplete] = useState(false);
+  const [processing, setProcessing] = useState(false);
+
+  const predefinedAmounts = [10, 25, 50, 100, 250];
+
+  const handleDonate = async () => {
+    if (!amount || parseFloat(amount) < 5) {
+      Alert.alert('Invalid Amount', 'Minimum donation is $5');
+      return;
+    }
+
+    if (!cardComplete) {
+      Alert.alert('Incomplete Card', 'Please enter valid card details');
+      return;
+    }
+
+    setProcessing(true);
+
+    try {
+      // Step 1: Create PaymentMethod
+      const { paymentMethod, error: pmError } = await createPaymentMethod({
+        paymentMethodType: 'Card'
+      });
+
+      if (pmError) {
+        Alert.alert('Error', pmError.message);
+        setProcessing(false);
+        return;
+      }
+
+      // Step 2: Create donation on backend
+      const response = await fetch('/api/donations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          organization_id: organizationId,
+          amount: parseFloat(amount),
+          payment_method_id: paymentMethod.id,
+          donation_type: donationType
+        })
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        // Navigate to success screen
+        navigation.replace('DonationSuccess', {
+          amount: amount,
+          organization: organizationName,
+          donation_id: data.donation_id
+        });
+      } else {
+        Alert.alert('Error', data.error || 'Donation failed');
+      }
+
+    } catch (error) {
+      console.error('Donation error:', error);
+      Alert.alert('Error', 'An error occurred. Please try again.');
+    } finally {
+      setProcessing(false);
+    }
+  };
+
+  return (
+    <View style={styles.container}>
+      <Text style={styles.title}>Support {organizationName}</Text>
+
+      {/* Amount Selection */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Donation Amount</Text>
+        
+        <View style={styles.amountButtons}>
+          {predefinedAmounts.map(preset => (
+            <Button
+              key={preset}
+              mode={amount === preset.toString() ? 'contained' : 'outlined'}
+              onPress={() => setAmount(preset.toString())}
+              style={styles.amountButton}
+            >
+              ${preset}
+            </Button>
+          ))}
+        </View>
+
+        <TextInput
+          label="Custom Amount"
+          value={amount}
+          onChangeText={setAmount}
+          keyboardType="numeric"
+          mode="outlined"
+          left={<TextInput.Icon icon="currency-usd" />}
+          style={styles.input}
+        />
+      </View>
+
+      {/* Donation Type */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Donation Type</Text>
+        <RadioButton.Group onValueChange={setDonationType} value={donationType}>
+          <RadioButton.Item label="One-time donation" value="one_time" />
+          <RadioButton.Item label="Monthly recurring" value="recurring" />
+        </RadioButton.Group>
+      </View>
+
+      {/* Card Input */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Payment Method</Text>
+        <CardField
+          postalCodeEnabled={true}
+          placeholder={{
+            number: '4242 4242 4242 4242'
+          }}
+          cardStyle={styles.cardField}
+          style={styles.cardFieldContainer}
+          onCardChange={(cardDetails) => {
+            setCardComplete(cardDetails.complete);
+          }}
+        />
+      </View>
+
+      {/* Donate Button */}
+      <Button
+        mode="contained"
+        onPress={handleDonate}
+        loading={processing}
+        disabled={processing || !cardComplete || !amount}
+        style={styles.donateButton}
+        contentStyle={styles.donateButtonContent}
+      >
+        {donationType === 'recurring' 
+          ? `Donate ${amount}/month`
+          : `Donate ${amount}`
+        }
+      </Button>
+
+      <Text style={styles.secureText}>
+        🔒 Secured by Stripe • Your card details are never stored
+      </Text>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    padding: 20,
+    backgroundColor: '#FFF',
+  },
+  title: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    marginBottom: 20,
+  },
+  section: {
+    marginBottom: 24,
+  },
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    marginBottom: 12,
+  },
+  amountButtons: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 12,
+  },
+  amountButton: {
+    minWidth: 70,
+  },
+  input: {
+    marginTop: 8,
+  },
+  cardFieldContainer: {
+    height: 50,
+  },
+  cardField: {
+    backgroundColor: '#FFFFFF',
+    textColor: '#000000',
+  },
+  donateButton: {
+    marginTop: 24,
+  },
+  donateButtonContent: {
+    paddingVertical: 8,
+  },
+  secureText: {
+    textAlign: 'center',
+    color: '#666',
+    fontSize: 12,
+    marginTop: 16,
+  },
+});
+```
+
+### 8.3 Apple Pay / Google Pay Integration
+
+```javascript
+// components/QuickDonateButton.js
+import React from 'react';
+import { Platform, StyleSheet } from 'react-native';
+import { Button } from 'react-native-paper';
+import { 
+  useApplePay, 
+  useGooglePay, 
+  isPlatformPaySupported 
+} from '@stripe/stripe-react-native';
+
+export default function QuickDonateButton({ amount, organizationId, onSuccess }) {
+  const { presentApplePay } = useApplePay();
+  const { initGooglePay, presentGooglePay } = useGooglePay();
+
+  const handleQuickPay = async () => {
+    try {
+      if (Platform.OS === 'ios') {
+        // Apple Pay
+        const { error } = await presentApplePay({
+          cartItems: [{
+            label: 'Humanitarian Donation',
+            amount: amount.toString(),
+            paymentType: 'Immediate'
+          }],
+          country: 'US',
+          currency: 'USD',
+        });
+
+        if (error) {
+          console.error('Apple Pay error:', error);
+          return;
+        }
+
+        // Process payment on backend
+        await processQuickPayment(amount, organizationId, 'apple_pay');
+        onSuccess();
+
+      } else {
+        // Google Pay
+        const { error: initError } = await initGooglePay({
+          testEnv: __DEV__,
+          merchantName: 'Humanitarian App',
+          countryCode: 'US',
+          billingAddressConfig: {
+            isRequired: true,
+          },
+        });
+
+        if (initError) {
+          console.error('Google Pay init error:', initError);
+          return;
+        }
+
+        const { error } = await presentGooglePay({
+          clientSecret: await getClientSecret(amount, organizationId),
+        });
+
+        if (error) {
+          console.error('Google Pay error:', error);
+          return;
+        }
+
+        await processQuickPayment(amount, organizationId, 'google_pay');
+        onSuccess();
+      }
+
+    } catch (error) {
+      console.error('Quick pay error:', error);
+    }
+  };
+
+  return (
+    <Button
+      mode="contained"
+      onPress={handleQuickPay}
+      icon={Platform.OS === 'ios' ? 'apple' : 'google'}
+      style={styles.button}
+    >
+      {Platform.OS === 'ios' ? 'Apple Pay' : 'Google Pay'}
+    </Button>
+  );
+}
+
+async function getClientSecret(amount, organizationId) {
+  const response = await fetch('/api/donations/create-intent', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ amount, organization_id: organizationId })
+  });
+  const data = await response.json();
+  return data.client_secret;
+}
+
+async function processQuickPayment(amount, organizationId, method) {
+  await fetch('/api/donations', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      amount,
+      organization_id: organizationId,
+      payment_method_type: method
+    })
+  });
+}
+
+const styles = StyleSheet.create({
+  button: {
+    marginVertical: 8,
+  }
+});
+```
+
+---
+
+## 9. Database Schema
+
+```sql
+-- Donations table
+CREATE TABLE donations (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    organization_id UUID REFERENCES organizations(id) ON DELETE RESTRICT,
+    conflict_id UUID REFERENCES conflicts(id) ON DELETE SET NULL,
+    
+    -- Amount details
+    amount DECIMAL(10, 2) NOT NULL,
+    currency VARCHAR(3) DEFAULT 'usd',
+    platform_fee DECIMAL(10, 2) DEFAULT 0,
+    net_amount DECIMAL(10, 2) NOT NULL,
+    
+    -- Stripe details
+    stripe_payment_intent_id VARCHAR(255) UNIQUE,
+    stripe_charge_id VARCHAR(255),
+    stripe_transfer_id VARCHAR(255),
+    
+    -- Status
+    status VARCHAR(50) NOT NULL, -- pending, succeeded, failed, refunded
+    error_message TEXT,
+    
+    -- Type
+    donation_type VARCHAR(50), -- one_time, recurring
+    source_subscription_id UUID REFERENCES recurring_donations(id),
+    
+    -- Payment method
+    payment_method_type VARCHAR(50), -- card, apple_pay, google_pay
+    last_4 VARCHAR(4),
+    card_brand VARCHAR(50),
+    
+    -- User preferences
+    anonymous BOOLEAN DEFAULT false,
+    dedication_message TEXT,
+    cover_fees BOOLEAN DEFAULT false,
+    
+    -- Receipts
+    receipt_sent BOOLEAN DEFAULT false,
+    receipt_sent_at TIMESTAMP,
+    tax_receipt_url TEXT,
+    
+    -- Metadata
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    refunded_at TIMESTAMP
+);
+
+-- Recurring donations table
+CREATE TABLE recurring_donations (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    
+    -- Stripe details
+    stripe_subscription_id VARCHAR(255) UNIQUE NOT NULL,
+    stripe_price_id VARCHAR(255),
+    stripe_customer_id VARCHAR(255),
+    
+    -- Subscription details
+    amount DECIMAL(10, 2) NOT NULL,
+    currency VARCHAR(3) DEFAULT 'usd',
+    frequency VARCHAR(50), -- monthly, quarterly
+    
+    -- Allocation
+    allocation_type VARCHAR(50), -- fixed_org, algorithm_driven, user_selected
+    organization_ids UUID[], -- For fixed allocation
+    
+    -- Status
+    status VARCHAR(50) DEFAULT 'active', -- active, paused, cancelled, payment_failed
+    
+    -- Dates
+    next_charge_date DATE,
+    last_charge_date DATE,
+    cancelled_at TIMESTAMP,
+    
+    -- Stats
+    total_charged DECIMAL(10, 2) DEFAULT 0,
+    successful_charges INTEGER DEFAULT 0,
+    failed_charges INTEGER DEFAULT 0,
+    
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Organizations payment info
+CREATE TABLE organizations (
+    id UUID PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    
+    -- Stripe Connect
+    stripe_account_id VARCHAR(255) UNIQUE,
+    stripe_charges_enabled BOOLEAN DEFAULT false,
+    stripe_payouts_enabled BOOLEAN DEFAULT false,
+    stripe_onboarding_completed BOOLEAN DEFAULT false,
+    
+    -- Bank details (encrypted)
+    bank_account_last_4 VARCHAR(4),
+    bank_account_routing VARCHAR(255),
+    
+    -- Tax info
+    ein VARCHAR(50), -- Tax ID
+    tax_exempt_status VARCHAR(50),
+    
+    -- Verification
+    verification_status VARCHAR(50) DEFAULT 'unverified',
+    verified_at TIMESTAMP,
+    
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Payouts tracking
+CREATE TABLE payouts (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    organization_id UUID REFERENCES organizations(id) ON DELETE RESTRICT,
+    
+    stripe_transfer_id VARCHAR(255) UNIQUE,
+    stripe_payout_id VARCHAR(255),
+    
+    amount DECIMAL(10, 2) NOT NULL,
+    currency VARCHAR(3) DEFAULT 'usd',
+    
+    status VARCHAR(50), -- pending, in_transit, paid, failed
+    
+    initiated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    paid_at TIMESTAMP,
+    
+    -- Metadata
+    donation_count INTEGER, -- How many donations in this payout
+    date_range_start DATE,
+    date_range_end DATE
+);
+
+-- Refunds
+CREATE TABLE refunds (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    donation_id UUID REFERENCES donations(id) ON DELETE RESTRICT,
+    user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    
+    stripe_refund_id VARCHAR(255) UNIQUE,
+    
+    amount DECIMAL(10, 2) NOT NULL,
+    reason VARCHAR(255),
+    
+    status VARCHAR(50), -- pending, succeeded, failed
+    
+    requested_by VARCHAR(50), -- user, admin, automatic
+    requested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    processed_at TIMESTAMP
+);
+
+-- Indexes
+CREATE INDEX idx_donations_user_id ON donations(user_id);
+CREATE INDEX idx_donations_organization_id ON donations(organization_id);
+CREATE INDEX idx_donations_status ON donations(status);
+CREATE INDEX idx_donations_created_at ON donations(created_at);
+CREATE INDEX idx_recurring_user_id ON recurring_donations(user_id);
+CREATE INDEX idx_recurring_status ON recurring_donations(status);
+CREATE INDEX idx_payouts_organization ON payouts(organization_id);
+CREATE INDEX idx_payouts_status ON payouts(status);
+```
+
+---
+
+## 10. Tax Receipt Generation
+
+```javascript
+// services/receipt_service.js
+const PDFDocument = require('pdfkit');
+const { Storage } = require('@google-cloud/storage');
+
+class ReceiptService {
+  /**
+   * Generate tax receipt for donation
+   */
+  
+  async generateReceipt(donationId) {
+    // Get donation details
+    const donation = await db.query(`
+      SELECT 
+        d.*,
+        u.full_name, u.email, u.address, u.city, u.state, u.zip_code,
+        o.name as org_name, o.ein, o.address as org_address
+      FROM donations d
+      JOIN users u ON d.user_id = u.id
+      JOIN organizations o ON d.organization_id = o.id
+      WHERE d.id = $1
+    `, [donationId]);
+
+    if (!donation.rows.length) {
+      throw new Error('Donation not found');
+    }
+
+    const data = donation.rows[0];
+
+    // Create PDF
+    const doc = new PDFDocument({ margin: 50 });
+    const buffers = [];
+
+    doc.on('data', buffers.push.bind(buffers));
+    
+    return new Promise((resolve, reject) => {
+      doc.on('end', async () => {
+        const pdfBuffer = Buffer.concat(buffers);
+        
+        // Upload to cloud storage
+        const receiptUrl = await this.uploadReceipt(donationId, pdfBuffer);
+        
+        // Update database
+        await db.query(`
+          UPDATE donations
+          SET tax_receipt_url = $2, receipt_sent = true, receipt_sent_at = NOW()
+          WHERE id = $1
+        `, [donationId, receiptUrl]);
+
+        resolve(receiptUrl);
+      });
+
+      // PDF Content
+      doc.fontSize(20).text(data.org_name, { align: 'center' });
+      doc.fontSize(12).text('Tax-Deductible Donation Receipt', { align: 'center' });
+      doc.moveDown();
+
+      doc.fontSize(10).text(`Receipt Number: ${data.id}`);
+      doc.text(`Date: ${new Date(data.created_at).toLocaleDateString()}`);
+      doc.moveDown();
+
+      doc.fontSize(12).text('Donor Information:', { underline: true });
+      doc.fontSize(10);
+      doc.text(`Name: ${data.full_name}`);
+      if (data.address) {
+        doc.text(`Address: ${data.address}`);
+        doc.text(`${data.city}, ${data.state} ${data.zip_code}`);
+      }
+      doc.moveDown();
+
+      doc.fontSize(12).text('Donation Details:', { underline: true });
+      doc.fontSize(10);
+      doc.text(`Amount: ${data.amount.toFixed(2)} USD`);
+      doc.text(`Payment Method: ${this.formatPaymentMethod(data.payment_method_type)}`);
+      if (data.dedication_message) {
+        doc.text(`In Honor/Memory of: ${data.dedication_message}`);
+      }
+      doc.moveDown();
+
+      doc.fontSize(12).text('Organization Information:', { underline: true });
+      doc.fontSize(10);
+      doc.text(`Organization: ${data.org_name}`);
+      doc.text(`EIN: ${data.ein}`);
+      doc.text(`Address: ${data.org_address}`);
+      doc.moveDown();
+
+      doc.fontSize(9).text(
+        'This organization is a tax-exempt charitable organization under Section 501(c)(3) of the Internal Revenue Code. ' +
+        'No goods or services were provided in exchange for this contribution. ' +
+        'Please retain this receipt for your tax records.',
+        { align: 'justify' }
+      );
+
+      doc.end();
+    });
+  }
+
+  async uploadReceipt(donationId, pdfBuffer) {
+    const storage = new Storage();
+    const bucket = storage.bucket(process.env.RECEIPTS_BUCKET);
+    
+    const fileName = `receipts/${donationId}.pdf`;
+    const file = bucket.file(fileName);
+
+    await file.save(pdfBuffer, {
+      metadata: { contentType: 'application/pdf' }
+    });
+
+    // Make publicly accessible (or use signed URLs)
+    await file.makePublic();
+
+    return `https://storage.googleapis.com/${process.env.RECEIPTS_BUCKET}/${fileName}`;
+  }
+
+  formatPaymentMethod(type) {
+    const methods = {
+      card: 'Credit/Debit Card',
+      apple_pay: 'Apple Pay',
+      google_pay: 'Google Pay'
+    };
+    return methods[type] || type;
+  }
+
+  async emailReceipt(donationId) {
+    const donation = await db.query(`
+      SELECT u.email, d.tax_receipt_url, d.amount, o.name
+      FROM donations d
+      JOIN users u ON d.user_id = u.id
+      JOIN organizations o ON d.organization_id = o.id
+      WHERE d.id = $1
+    `, [donationId]);
+
+    const { email, tax_receipt_url, amount, name } = donation.rows[0];
+
+    await emailService.send({
+      to: email,
+      subject: 'Tax Receipt for Your Donation',
+      template: 'donation-receipt',
+      data: {
+        amount: amount,
+        organization: name,
+        receipt_url: tax_receipt_url
+      }
+    });
+  }
+}
+
+module.exports = ReceiptService;
+```
+
+---
+
+## 11. Fraud Prevention
+
+```javascript
+// middleware/fraud_detection.js
+
+class FraudDetectionMiddleware {
+  /**
+   * Detect and prevent fraudulent donations
+   */
+  
+  async checkDonation(req, res, next) {
+    const { userId, amount, paymentMethodId } = req.body;
+
+    try {
+      // Check 1: Unusual donation amount
+      if (await this.isUnusualAmount(userId, amount)) {
+        // Flag for review but allow
+        await this.flagForReview(userId, 'unusual_amount', { amount });
+      }
+
+      // Check 2: Rapid repeated donations
+      if (await this.hasRapidDonations(userId)) {
+        return res.status(429).json({
+          error: 'Too many donation attempts. Please try again later.'
+        });
+      }
+
+      // Check 3: Velocity check (IP-based)
+      const ipAddress = req.ip;
+      if (await this.hasHighVelocity(ipAddress)) {
+        return res.status(429).json({
+          error: 'Too many requests from this location'
+        });
+      }
+
+      // Check 4: Card testing pattern
+      if (await this.isCardTesting(userId, paymentMethodId)) {
+        await this.blockUser(userId, 'card_testing');
+        return res.status(403).json({
+          error: 'Suspicious activity detected'
+        });
+      }
+
+      // Use Stripe Radar (automatic fraud detection)
+      // Stripe handles most fraud detection automatically
+
+      next();
+
+    } catch (error) {
+      console.error('Fraud check error:', error);
+      next(); // Allow transaction on check failure (fail open)
+    }
+  }
+
+  async isUnusualAmount(userId, amount) {
+    // Check if amount is significantly different from user's history
+    const stats = await db.query(`
+      SELECT AVG(amount) as avg_amount, MAX(amount) as max_amount
+      FROM donations
+      WHERE user_id = $1 AND status = 'succeeded'
+    `, [userId]);
+
+    if (!stats.rows.length) return false;
+
+    const { avg_amount, max_amount } = stats.rows[0];
+    
+    // Flag if 3x average or 2x previous max
+    return amount > avg_amount * 3 || amount > max_amount * 2;
+  }
+
+  async hasRapidDonations(userId) {
+    // Check for >5 donations in 10 minutes
+    const recent = await db.query(`
+      SELECT COUNT(*) as count
+      FROM donations
+      WHERE user_id = $1 
+      AND created_at > NOW() - INTERVAL '10 minutes'
+    `, [userId]);
+
+    return recent.rows[0].count > 5;
+  }
+
+  async hasHighVelocity(ipAddress) {
+    // Redis-based rate limiting
+    const key = `donation_velocity:${ipAddress}`;
+    const count = await redis.incr(key);
+    
+    if (count === 1) {
+      await redis.expire(key, 3600); // 1 hour window
+    }
+
+    return count > 20; // Max 20 donations per hour from one IP
+  }
+
+  async isCardTesting(userId, paymentMethodId) {
+    // Detect pattern of small donations with different cards
+    const recentCards = await db.query(`
+      SELECT COUNT(DISTINCT payment_method_id) as card_count,
+             COUNT(*) as donation_count
+      FROM donations
+      WHERE user_id = $1
+      AND created_at > NOW() - INTERVAL '1 hour'
+      AND amount < 5
+    `, [userId]);
+
+    const { card_count, donation_count } = recentCards.rows[0];
+
+    // >3 different cards with small amounts = likely card testing
+    return card_count > 3 && donation_count > 5;
+  }
+
+  async flagForReview(userId, reason, metadata) {
+    await db.query(`
+      INSERT INTO fraud_alerts (user_id, reason, metadata, created_at)
+      VALUES ($1, $2, $3, NOW())
+    `, [userId, reason, JSON.stringify(metadata)]);
+  }
+
+  async blockUser(userId, reason) {
+    await db.query(`
+      UPDATE users
+      SET account_status = 'blocked', blocked_reason = $2
+      WHERE id = $1
+    `, [userId, reason]);
+  }
+}
+
+module.exports = new FraudDetectionMiddleware();
+```
+
+---
+
+## 12. API Endpoints
+
+```javascript
+// routes/donations.js
+const express = require('express');
+const router = express.Router();
+const DonationService = require('../services/donation_service');
+const SubscriptionService = require('../services/subscription_service');
+const authMiddleware = require('../middleware/auth');
+const fraudDetection = require('../middleware/fraud_detection');
+
+// Create one-time donation
+router.post('/api/donations',
+  authMiddleware,
+  fraudDetection.checkDonation,
+  async (req, res) => {
+    try {
+      const donationService = new DonationService();
+      const result = await donationService.createDonation({
+        userId: req.user.id,
+        ...req.body
+      });
+
+      res.json(result);
+    } catch (error) {
+      console.error('Donation error:', error);
+      res.status(400).json({ 
+        error: error.message || 'Donation failed'
+      });
+    }
+  }
+);
+
+// Create recurring donation
+router.post('/api/donations/recurring',
+  authMiddleware,
+  async (req, res) => {
+    const { reason } = req.body;
+
+    try {
+      const donation = await db.query(`
+        SELECT * FROM donations 
+        WHERE id = $1 AND user_id = $2
+      `, [req.params.id, req.user.id]);
+
+      if (!donation.rows.length) {
+        return res.status(404).json({ error: 'Donation not found' });
+      }
+
+      const d = donation.rows[0];
+
+      // Check if refundable (within 30 days)
+      const daysSince = (Date.now() - new Date(d.created_at)) / (1000 * 60 * 60 * 24);
+      if (daysSince > 30) {
+        return res.status(400).json({ 
+          error: 'Refund period has expired (30 days)' 
+        });
+      }
+
+      // Create Stripe refund
+      const refund = await stripe.refunds.create({
+        payment_intent: d.stripe_payment_intent_id,
+        reason: 'requested_by_customer',
+        metadata: {
+          user_reason: reason
+        }
+      });
+
+      // Store refund record
+      await db.query(`
+        INSERT INTO refunds (
+          donation_id, user_id, stripe_refund_id,
+          amount, reason, requested_by, status
+        ) VALUES ($1, $2, $3, $4, $5, 'user', $6)
+      `, [d.id, req.user.id, refund.id, d.amount, reason, refund.status]);
+
+      // Update donation status
+      await db.query(`
+        UPDATE donations
+        SET status = 'refunded', refunded_at = NOW()
+        WHERE id = $1
+      `, [d.id]);
+
+      res.json({ 
+        success: true, 
+        refund_id: refund.id,
+        message: 'Refund processed successfully' 
+      });
+
+    } catch (error) {
+      console.error('Refund error:', error);
+      res.status(500).json({ error: 'Refund processing failed' });
+    }
+  }
+);
+
+// Download tax receipt
+router.get('/api/donations/:id/receipt',
+  authMiddleware,
+  async (req, res) => {
+    try {
+      const donation = await db.query(`
+        SELECT tax_receipt_url 
+        FROM donations 
+        WHERE id = $1 AND user_id = $2
+      `, [req.params.id, req.user.id]);
+
+      if (!donation.rows.length) {
+        return res.status(404).json({ error: 'Donation not found' });
+      }
+
+      const receiptUrl = donation.rows[0].tax_receipt_url;
+
+      if (!receiptUrl) {
+        // Generate receipt if not exists
+        const receiptService = new ReceiptService();
+        const url = await receiptService.generateReceipt(req.params.id);
+        return res.json({ receipt_url: url });
+      }
+
+      res.json({ receipt_url: receiptUrl });
+
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to retrieve receipt' });
+    }
+  }
+);
+
+module.exports = router;
+```
+
+---
+
+## 13. Testing Strategy
+
+### 13.1 Stripe Test Cards
+
+```javascript
+// tests/test_cards.js
+
+const TEST_CARDS = {
+  success: '4242424242424242',
+  decline: '4000000000000002',
+  insufficient_funds: '4000000000009995',
+  expired: '4000000000000069',
+  cvc_fail: '4000000000000127',
+  requires_3ds: '4000002500003155', // 3D Secure authentication
+  
+  // International cards
+  visa: '4242424242424242',
+  mastercard: '5555555555554444',
+  amex: '378282246310005',
+  discover: '6011111111111117'
+};
+
+// Test amounts that trigger specific behaviors
+const TEST_AMOUNTS = {
+  success: 10.00,
+  decline: 10.01,
+  insufficient_funds: 10.02,
+  expired: 10.03,
+  processing_error: 10.04
+};
+
+module.exports = { TEST_CARDS, TEST_AMOUNTS };
+```
+
+### 13.2 Integration Tests
+
+```javascript
+// tests/donation.test.js
+const request = require('supertest');
+const app = require('../app');
+const { TEST_CARDS } = require('./test_cards');
+
+describe('Donation Processing', () => {
+  let authToken;
+  let testUserId;
+  let testOrgId;
+
+  beforeAll(async () => {
+    // Set up test data
+    authToken = await getTestAuthToken();
+    testUserId = await createTestUser();
+    testOrgId = await createTestOrganization();
+  });
+
+  test('Should process successful one-time donation', async () => {
+    const response = await request(app)
+      .post('/api/donations')
+      .set('Authorization', `Bearer ${authToken}`)
+      .send({
+        organization_id: testOrgId,
+        amount: 50,
+        payment_method_id: 'pm_card_visa', // Stripe test payment method
+        donation_type: 'one_time'
+      });
+
+    expect(response.status).toBe(200);
+    expect(response.body.success).toBe(true);
+    expect(response.body.amount).toBe(50);
+  });
+
+  test('Should reject donation below minimum', async () => {
+    const response = await request(app)
+      .post('/api/donations')
+      .set('Authorization', `Bearer ${authToken}`)
+      .send({
+        organization_id: testOrgId,
+        amount: 3, // Below $5 minimum
+        payment_method_id: 'pm_card_visa'
+      });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error).toContain('Minimum');
+  });
+
+  test('Should create recurring subscription', async () => {
+    const response = await request(app)
+      .post('/api/donations/recurring')
+      .set('Authorization', `Bearer ${authToken}`)
+      .send({
+        amount: 25,
+        frequency: 'monthly',
+        allocation_type: 'fixed_org',
+        organization_ids: [testOrgId],
+        payment_method_id: 'pm_card_visa'
+      });
+
+    expect(response.status).toBe(200);
+    expect(response.body.success).toBe(true);
+    expect(response.body.subscription_id).toBeDefined();
+  });
+
+  test('Should handle declined card', async () => {
+    const response = await request(app)
+      .post('/api/donations')
+      .set('Authorization', `Bearer ${authToken}`)
+      .send({
+        organization_id: testOrgId,
+        amount: 50,
+        payment_method_id: 'pm_card_chargeDeclined' // Stripe test decline
+      });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error).toBeDefined();
+  });
+
+  test('Should process refund', async () => {
+    // First create a donation
+    const donation = await request(app)
+      .post('/api/donations')
+      .set('Authorization', `Bearer ${authToken}`)
+      .send({
+        organization_id: testOrgId,
+        amount: 50,
+        payment_method_id: 'pm_card_visa'
+      });
+
+    const donationId = donation.body.donation_id;
+
+    // Then request refund
+    const refund = await request(app)
+      .post(`/api/donations/${donationId}/refund`)
+      .set('Authorization', `Bearer ${authToken}`)
+      .send({
+        reason: 'Testing refund'
+      });
+
+    expect(refund.status).toBe(200);
+    expect(refund.body.success).toBe(true);
+  });
+});
+```
+
+---
+
+## 14. Security Best Practices Checklist
+
+```yaml
+✅ PCI Compliance:
+  - Never store raw card numbers
+  - Use Stripe.js/React Native SDK for card input
+  - Cards never touch your server
+  - Use Stripe tokenization
+
+✅ API Security:
+  - Require authentication for all donation endpoints
+  - Rate limiting on donation endpoints
+  - HTTPS only (TLS 1.2+)
+  - Validate all input
+  - Use idempotency keys
+  - CORS properly configured
+
+✅ Fraud Prevention:
+  - Stripe Radar enabled
+  - Velocity checks
+  - Unusual amount detection
+  - Card testing detection
+  - IP-based rate limiting
+
+✅ Data Protection:
+  - Encrypt sensitive data at rest
+  - Hash/encrypt bank routing numbers
+  - Anonymize donor data when requested
+  - GDPR/CCPA compliance
+  - Regular security audits
+
+✅ Webhook Security:
+  - Verify webhook signatures
+  - Use HTTPS endpoints
+  - Validate event types
+  - Idempotent webhook handlers
+  - Log all webhook events
+
+✅ User Privacy:
+  - Allow anonymous donations
+  - Don't share donor lists
+  - Opt-in for marketing emails
+  - Right to data deletion
+  - Secure receipt storage
+```
+
+---
+
+## 15. Cost Analysis
+
+### 15.1 Stripe Pricing Breakdown
+
+```yaml
+Standard Processing:
+  Per Transaction: 2.9% + $0.30
+  Example $50 donation: $1.75 (3.5% effective rate)
+  Example $100 donation: $3.20 (3.2% effective rate)
+  
+International Cards:
+  Additional: +1.5%
+  Example: 4.4% + $0.30 for international cards
+
+Currency Conversion:
+  Additional: +1%
+  
+Subscriptions:
+  Same as one-time: 2.9% + $0.30 per charge
+  No additional subscription fee
+
+Payouts (to nonprofits):
+  Instant: 1.5% (min $0.50)
+  Standard (2 days): FREE
+
+Refunds:
+  Stripe fee returned (except $0.30)
+
+Disputes/Chargebacks:
+  Disputed amount held
+  $15 fee if you lose dispute
+
+Your Platform Fee (Optional):
+  0-5% application fee
+  Example: 2% on $50 = $1.00
+  You keep this, nonprofit gets $48.25
+```
+
+### 15.2 Monthly Cost Estimate
+
+```
+Scenario: 1,000 donations/month, $50 average
+
+Stripe Fees:
+  1,000 × ($1.75) = $1,750/month
+  
+Your Platform Fee (optional 2%):
+  1,000 × $50 × 2% = $1,000/month
+  
+Infrastructure:
+  Server: $100-300/month
+  Database: $50-100/month
+  Storage: $20-50/month
+  Monitoring: $50/month
+  
+Total Platform Cost: $220-500/month
+Stripe Fees: $1,750/month
+Revenue (if 2% fee): $1,000/month
+```
+
+---
+
+## 16. Implementation Roadmap
+
+### Phase 1: Foundation (Weeks 1-2)
+- [ ] Set up Stripe Connect account
+- [ ] Implement one-time donations
+- [ ] Create database schema
+- [ ] Build basic mobile UI
+- [ ] Test with Stripe test mode
+
+### Phase 2: Recurring Donations (Weeks 3-4)
+- [ ] Implement subscription creation
+- [ ] Build subscription management UI
+- [ ] Add webhook handling
+- [ ] Test subscription lifecycle
+
+### Phase 3: Enhanced Features (Weeks 5-6)
+- [ ] Apple Pay / Google Pay integration
+- [ ] Tax receipt generation
+- [ ] Fraud detection
+- [ ] Refund system
+
+### Phase 4: Organization Onboarding (Weeks 7-8)
+- [ ] Stripe Connect onboarding flow
+- [ ] Organization verification
+- [ ] Payout tracking
+- [ ] Organization dashboard
+
+### Phase 5: Testing & Launch (Weeks 9-10)
+- [ ] Comprehensive testing
+- [ ] Security audit
+- [ ] Load testing
+- [ ] Production deployment
+- [ ] Monitoring setup
+
+---
+
+## 17. Monitoring & Alerts
+
+```javascript
+// monitoring/donation_monitor.js
+
+class DonationMonitor {
+  /**
+   * Monitor donation system health
+   */
+  
+  setupAlerts() {
+    // Alert 1: Failed donation rate spike
+    this.monitorFailureRate();
+    
+    // Alert 2: Webhook processing delays
+    this.monitorWebhookLatency();
+    
+    // Alert 3: Unusual donation patterns
+    this.monitorAnomalies();
+    
+    // Alert 4: Payout failures
+    this.monitorPayouts();
+  }
+
+  async monitorFailureRate() {
+    setInterval(async () => {
+      const stats = await db.query(`
+        SELECT 
+          COUNT(*) FILTER (WHERE status = 'failed') as failed,
+          COUNT(*) as total
+        FROM donations
+        WHERE created_at > NOW() - INTERVAL '1 hour'
+      `);
+
+      const { failed, total } = stats.rows[0];
+      const failureRate = total > 0 ? failed / total : 0;
+
+      if (failureRate > 0.1) { // >10% failure rate
+        this.alert('High failure rate', {
+          rate: failureRate,
+          failed: failed,
+          total: total
+        });
+      }
+    }, 5 * 60 * 1000); // Check every 5 minutes
+  }
+
+  async monitorWebhookLatency() {
+    // Check webhook processing time
+    setInterval(async () => {
+      const latency = await redis.get('webhook:avg_latency');
+      
+      if (latency && parseFloat(latency) > 5000) { // >5 seconds
+        this.alert('Webhook processing slow', { latency });
+      }
+    }, 5 * 60 * 1000);
+  }
+
+  alert(message, data) {
+    // Send to Slack/PagerDuty/Email
+    console.error(`🚨 ALERT: ${message}`, data);
+    
+    // Integrate with alerting service
+    // slackService.sendAlert(message, data);
+    // pagerDuty.trigger(message, data);
+  }
+}
+
+module.exports = DonationMonitor;
+```
+
+---
+
+## 18. Key Metrics Dashboard
+
+```javascript
+// analytics/donation_metrics.js
+
+class DonationMetrics {
+  async getDashboardMetrics(timeRange = '30d') {
+    const metrics = {};
+
+    // Total donations
+    metrics.total_donations = await this.getTotalDonations(timeRange);
+    
+    // Total amount
+    metrics.total_amount = await this.getTotalAmount(timeRange);
+    
+    // Average donation
+    metrics.avg_donation = await this.getAverageDonation(timeRange);
+    
+    // Recurring vs one-time
+    metrics.donation_split = await this.getDonationSplit(timeRange);
+    
+    // Success rate
+    metrics.success_rate = await this.getSuccessRate(timeRange);
+    
+    // Top organizations
+    metrics.top_organizations = await this.getTopOrganizations(timeRange);
+    
+    // Donor retention
+    metrics.retention_rate = await this.getRetentionRate();
+    
+    // MRR (Monthly Recurring Revenue for nonprofits)
+    metrics.mrr = await this.getMRR();
+
+    return metrics;
+  }
+
+  async getTotalDonations(timeRange) {
+    const result = await db.query(`
+      SELECT COUNT(*) as count
+      FROM donations
+      WHERE created_at > NOW() - INTERVAL '${timeRange}'
+      AND status = 'succeeded'
+    `);
+    return result.rows[0].count;
+  }
+
+  async getTotalAmount(timeRange) {
+    const result = await db.query(`
+      SELECT SUM(amount) as total
+      FROM donations
+      WHERE created_at > NOW() - INTERVAL '${timeRange}'
+      AND status = 'succeeded'
+    `);
+    return parseFloat(result.rows[0].total || 0);
+  }
+
+  async getMRR() {
+    const result = await db.query(`
+      SELECT SUM(amount) as mrr
+      FROM recurring_donations
+      WHERE status = 'active'
+    `);
+    return parseFloat(result.rows[0].mrr || 0);
+  }
+}
+
+module.exports = DonationMetrics;
+```
+
+---
+
+## 19. Alternative Payment Methods (Future)
+
+```yaml
+Cryptocurrency:
+  - Coinbase Commerce
+  - BitPay
+  - Direct wallet integration
+  Pros: Lower fees (1%), international
+  Cons: Volatility, complexity
+
+Bank Transfers (ACH):
+  - Plaid + Stripe ACH
+  - Lower fees (0.8%)
+  - Takes 3-5 days
+  - Good for large donations
+
+PayPal:
+  - Familiar to users
+  - Higher fees (3.49% + $0.49)
+  - Slower payouts
+
+Venmo/Cash App:
+  - Popular with younger donors
+  - Not ideal for nonprofits
+  - Limited business features
+
+Gift Cards:
+  - Accept gift card donations
+  - Convert to cash via services
+  - Complex to implement
+```
+
+---
+
+## 20. Compliance Requirements
+
+```yaml
+Legal Requirements:
+  - IRS 501(c)(3) verification for nonprofits
+  - Proper tax receipt generation
+  - Anti-money laundering (AML) checks
+  - Know Your Customer (KYC) for large donations
+  - State charity registration (varies by state)
+
+Financial Regulations:
+  - PCI DSS compliance (handled by Stripe)
+  - State unclaimed property laws
+  - Escheatment (unclaimed funds)
+  - Record retention (7 years)
+
+Privacy Laws:
+  - GDPR (EU donors)
+  - CCPA (California)
+  - Right to deletion
+  - Data breach notification
+
+Nonprofit Regulations:
+  - Donor acknowledgment letters (>$250)
+  - Quid pro quo disclosures
+  - Substantiation requirements
+  - Appraisal requirements (>$5,000)
+```
+
+---
+
+## Summary: Why This Stack?
+
+**Stripe Connect** is the clear winner because:
+1. ✅ **Built for marketplaces** - Designed for your use case
+2. ✅ **Handles compliance** - PCI DSS, KYC, etc.
+3. ✅ **Excellent mobile SDKs** - React Native support
+4. ✅ **Recurring billing built-in** - Subscriptions API
+5. ✅ **Direct payouts** - Funds go straight to nonprofits
+6. ✅ **Fraud prevention** - Stripe Radar included
+7. ✅ **Global reach** - 135+ currencies
+8. ✅ **Developer-friendly** - Best documentation
+
+**Total Cost**: 2.9% + $0.30 per transaction (industry standard)
+
+---
+
+Would you like me to:
+1. **Build the complete mobile donation flow** with all UI screens?
+2. **Create the organization onboarding dashboard**?
+3. **Design the admin panel** for monitoring donations?
+4. **Implement the split donation** algorithm (one donation → multiple orgs)?
+5. **Add cryptocurrency payment** integration? res) => {
+    try {
+      const subscriptionService = new SubscriptionService();
+      const result = await subscriptionService.createRecurringDonation({
+        userId: req.user.id,
+        ...req.body
+      });
+
+      res.json(result);
+    } catch (error) {
+      console.error('Subscription error:', error);
+      res.status(400).json({ 
+        error: error.message || 'Subscription creation failed'
+      });
+    }
+  }
+);
+
+// Get user's donation history
+router.get('/api/donations/history',
+  authMiddleware,
+  async (req, res) => {
+    const limit = parseInt(req.query.limit) || 20;
+    const offset = parseInt(req.query.offset) || 0;
+
+    try {
+      const donations = await db.query(`
+        SELECT 
+          d.*,
+          o.name as organization_name,
+          c.country_name
+        FROM donations d
+        LEFT JOIN organizations o ON d.organization_id = o.id
+        LEFT JOIN conflicts c ON d.conflict_id = c.id
+        WHERE d.user_id = $1
+        ORDER BY d.created_at DESC
+        LIMIT $2 OFFSET $3
+      `, [req.user.id, limit, offset]);
+
+      res.json({
+        donations: donations.rows,
+        has_more: donations.rows.length === limit
+      });
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to fetch donation history' });
+    }
+  }
+);
+
+// Get recurring donations
+router.get('/api/donations/recurring',
+  authMiddleware,
+  async (req, res) => {
+    try {
+      const subscriptions = await db.query(`
+        SELECT 
+          rd.*,
+          ARRAY_AGG(DISTINCT o.name) as organization_names
+        FROM recurring_donations rd
+        LEFT JOIN LATERAL unnest(rd.organization_ids) org_id ON true
+        LEFT JOIN organizations o ON o.id = org_id
+        WHERE rd.user_id = $1
+        GROUP BY rd.id
+        ORDER BY rd.created_at DESC
+      `, [req.user.id]);
+
+      res.json({ subscriptions: subscriptions.rows });
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to fetch subscriptions' });
+    }
+  }
+);
+
+// Cancel recurring donation
+router.post('/api/donations/recurring/:id/cancel',
+  authMiddleware,
+  async (req, res) => {
+    try {
+      const subscriptionService = new SubscriptionService();
+      const result = await subscriptionService.cancelSubscription(
+        req.user.id,
+        req.params.id
+      );
+
+      res.json(result);
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  }
+);
+
+// Update recurring amount
+router.put('/api/donations/recurring/:id/amount',
+  authMiddleware,
+  async (req, res) => {
+    const { new_amount } = req.body;
+
+    try {
+      const subscriptionService = new SubscriptionService();
+      const result = await subscriptionService.updateSubscriptionAmount(
+        req.user.id,
+        req.params.id,
+        new_amount
+      );
+
+      res.json(result);
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  }
+);
+
+// Request refund
+router.post('/api/donations/:id/refund',
+  authMiddleware,
+  async (req,# Donation Processing & Recurring Donations System
+
+## 1. Payment Platform Comparison
+
+### Stripe Connect (RECOMMENDED ⭐)
+
+**Why Stripe Connect is Best for Your Use Case:**
+
+```yaml
+Pros:
+  - Designed for marketplace/platform models
+  - Direct payouts to nonprofits (verified accounts)
+  - Built-in recurring billing (Stripe Subscriptions)
+  - Excellent mobile SDKs (React Native)
+  - PCI compliance handled automatically
+  - Strong fraud prevention (Stripe Radar)
+  - Supports 135+ currencies
+  - Tax receipt generation
+  - Detailed transaction reporting
+  - Webhooks for real-time events
+  - Application fees (you take 0-5% cut if needed)
+  
+Cons:
+  - 2.9% + $0.30 per transaction (standard)
+  - Requires nonprofit bank account verification
+  - Learning curve for Connect setup
+
+Pricing:
+  - Standard: 2.9% + $0.30 per transaction
+  - Your platform fee: 0-5% (optional)
+  - No monthly fees
+  - No setup fees
+```
+
+**Alternative: PayPal Giving Fund**
+- Lower fees (1.99% + $0.49)
+- But: Less control, slower payouts, limited customization
+
+**Alternative: Donorbox**
+- Built for nonprofits
+- But: Higher fees (1.75% + Stripe), less flexibility
+
+---
+
+## 2. System Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    MOBILE APP (React Native)                 │
+│              Stripe React Native SDK                         │
+└────────────────────┬────────────────────────────────────────┘
+                     ↓
+┌─────────────────────────────────────────────────────────────┐
+│                   YOUR BACKEND API                           │
+│          (Node.js + Express or Python + FastAPI)             │
+└────────────────────┬────────────────────────────────────────┘
+                     ↓
+┌─────────────────────────────────────────────────────────────┐
+│                    STRIPE CONNECT API                        │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
+│  │  Payment     │  │  Subscriptions│  │  Transfers   │      │
+│  │  Intents     │  │  (Recurring)  │  │  (Payouts)   │      │
+│  └──────────────┘  └──────────────┘  └──────────────┘      │
+└────────────────────┬────────────────────────────────────────┘
+                     ↓
+┌─────────────────────────────────────────────────────────────┐
+│                ORGANIZATION STRIPE ACCOUNTS                  │
+│          (Connected Accounts - Express or Standard)          │
+└─────────────────────────────────────────────────────────────┘
+                     ↓
+┌─────────────────────────────────────────────────────────────┐
+│              ORGANIZATION BANK ACCOUNTS                      │
+│            (Verified via Stripe Connect)                     │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 3. Technology Stack
+
+### Core Technologies
+
+```yaml
+Backend:
+  Framework: Node.js with Express.js (or Python FastAPI)
+  Payment Processing: Stripe SDK (stripe npm package)
+  Database: PostgreSQL (for transaction records)
+  Cache: Redis (for idempotency, rate limiting)
+  Queue: Bull (for async processing, retries)
+  Encryption: bcrypt (for sensitive data), Stripe tokenization
+  
+Mobile SDK:
+  React Native: @stripe/stripe-react-native
+  Payment UI: Pre-built components
+  Apple Pay: Built-in support
+  Google Pay: Built-in support
+  
+Security:
+  PCI Compliance: Handled by Stripe (no card data touches your servers)
+  Encryption: TLS 1.2+ for all API calls
+  Webhooks: HMAC signature verification
+  Rate Limiting: express-rate-limit
+  
+Monitoring:
+  Logging: Winston or Pino
+  APM: Datadog or New Relic
+  Error Tracking: Sentry
+  
+Testing:
+  Unit Tests: Jest
+  Integration Tests: Supertest
+  Stripe Testing: Test mode with test cards
+```
+
+---
+
+## 4. Stripe Connect Setup
+
+### 4.1 Account Types
+
+**For Your Platform (Main Account):**
+```
+Account Type: Standard Stripe Account
+Purpose: Receive application fees, manage platform
+```
+
+**For Nonprofits (Connected Accounts):**
+```
+Account Type: Express Connected Accounts (RECOMMENDED)
+Why: 
+  - Faster onboarding (pre-built flow)
+  - Stripe handles compliance/verification
+  - Organizations don't need separate Stripe account
+  
+Alternative: Standard Connected Accounts
+  - More control for organizations
+  - Organizations manage their own Stripe dashboard
+  - Longer onboarding
+```
+
+### 4.2 Implementation
+
+```javascript
+// config/stripe.js
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+
+module.exports = stripe;
+```
+
+```javascript
+// services/stripe_connect_service.js
+const stripe = require('../config/stripe');
+
+class StripeConnectService {
+  /**
+   * Onboard a new nonprofit organization
+   */
+  
+  async createConnectedAccount(organization) {
+    /**
+     * Create Express Connected Account for nonprofit
+     */
+    
+    try {
+      const account = await stripe.accounts.create({
+        type: 'express',
+        country: organization.country || 'US',
+        email: organization.email,
+        capabilities: {
+          card_payments: { requested: true },
+          transfers: { requested: true }
+        },
+        business_type: 'non_profit',
+        business_profile: {
+          name: organization.name,
+          url: organization.website,
+          mcc: '8398', // Charitable organizations MCC code
+          product_description: organization.mission
+        },
+        metadata: {
+          organization_id: organization.id,
+          ein: organization.ein, // Tax ID
+          verification_status: 'pending'
+        }
+      });
+
+      // Store Stripe account ID
+      await this.storeConnectedAccount(organization.id, account.id);
+
+      return account;
+    } catch (error) {
+      console.error('Error creating connected account:', error);
+      throw error;
+    }
+  }
+
+  async createAccountLink(accountId, organizationId) {
+    /**
+     * Generate onboarding link for organization
+     * They'll complete this to verify bank account, tax info, etc.
+     */
+    
+    const accountLink = await stripe.accountLinks.create({
+      account: accountId,
+      refresh_url: `${process.env.APP_URL}/organizations/${organizationId}/onboarding/refresh`,
+      return_url: `${process.env.APP_URL}/organizations/${organizationId}/onboarding/complete`,
+      type: 'account_onboarding'
+    });
+
+    return accountLink.url;
+  }
+
+  async getAccountStatus(accountId) {
+    /**
+     * Check if account is fully onboarded and can receive payouts
+     */
+    
+    const account = await stripe.accounts.retrieve(accountId);
+
+    return {
+      charges_enabled: account.charges_enabled,
+      payouts_enabled: account.payouts_enabled,
+      details_submitted: account.details_submitted,
+      requirements: account.requirements
+    };
+  }
+
+  async storeConnectedAccount(organizationId, stripeAccountId) {
+    /**
+     * Store Stripe account ID in your database
+     */
+    
+    await db.query(`
+      UPDATE organizations
+      SET 
+        stripe_account_id = $1,
+        stripe_onboarding_completed = false,
+        updated_at = NOW()
+      WHERE id = $2
+    `, [stripeAccountId, organizationId]);
+  }
+}
+
+module.exports = StripeConnectService;
+```
+
+---
+
+## 5. One-Time Donation Processing
+
+### 5.1 Payment Flow
+
+```
+User selects amount → App creates PaymentIntent → User confirms → Funds held → Transfer to nonprofit → Receipt sent
+```
+
+### 5.2 Backend Implementation
+
+```javascript
+// services/donation_service.js
+const stripe = require('../config/stripe');
+const { v4: uuidv4 } = require('uuid');
+
+class DonationService {
+  /**
+   * Process one-time donation
+   */
+  
+  async createDonation(donationData) {
+    /**
+     * donationData: {
+     *   userId, organizationId, conflictId,
+     *   amount, currency, paymentMethodId, 
+     *   anonymous, dedicationMessage
+     * }
+     */
+    
+    const { 
+      userId, 
+      organizationId, 
+      conflictId,
+      amount, 
+      currency = 'usd',
+      paymentMethodId,
+      anonymous = false,
+      dedicationMessage 
+    } = donationData;
+
+    // Validate amount (minimum $5)
+    if (amount < 5) {
+      throw new Error('Minimum donation amount is $5');
+    }
+
+    // Get organization Stripe account
+    const organization = await this.getOrganization(organizationId);
+    
+    if (!organization.stripe_account_id) {
+      throw new Error('Organization is not set up to receive donations');
+    }
+
+    // Calculate fees
+    const platformFee = this.calculatePlatformFee(amount); // 0-5%
+    const applicationFeeAmount = Math.round(amount * platformFee * 100); // in cents
+
+    // Generate idempotency key (prevent duplicate charges)
+    const idempotencyKey = uuidv4();
+
+    try {
+      // Create PaymentIntent
+      const paymentIntent = await stripe.paymentIntents.create({
+        amount: Math.round(amount * 100), // Convert to cents
+        currency: currency,
+        payment_method: paymentMethodId,
+        confirm: true, // Automatically confirm
+        application_fee_amount: applicationFeeAmount,
+        transfer_data: {
+          destination: organization.stripe_account_id
+        },
+        metadata: {
+          user_id: userId,
+          organization_id: organizationId,
+          conflict_id: conflictId || '',
+          anonymous: anonymous.toString(),
+          donation_type: 'one_time'
+        },
+        description: `Donation to ${organization.name}`,
+        statement_descriptor: 'HUMANITARIAN AID',
+        receipt_email: anonymous ? null : await this.getUserEmail(userId)
+      }, {
+        idempotencyKey: idempotencyKey
+      });
+
+      // Store donation record
+      const donation = await this.storeDonation({
+        id: uuidv4(),
+        user_id: userId,
+        organization_id: organizationId,
+        conflict_id: conflictId,
+        amount: amount,
+        currency: currency,
+        platform_fee: platformFee * amount,
+        net_amount: amount - (platformFee * amount),
+        stripe_payment_intent_id: paymentIntent.id,
+        status: paymentIntent.status,
+        anonymous: anonymous,
+        dedication_message: dedicationMessage,
+        payment_method_type: 'card'
+      });
+
+      // Send confirmation email (async)
+      this.sendDonationConfirmation(donation);
+
+      // Update user stats
+      this.updateUserDonationStats(userId, amount);
+
+      // Award badges if applicable
+      this.checkAndAwardBadges(userId);
+
+      return {
+        success: true,
+        donation_id: donation.id,
+        amount: amount,
+        organization: organization.name,
+        payment_intent_id: paymentIntent.id
+      };
+
+    } catch (error) {
+      console.error('Donation processing error:', error);
+      
+      // Store failed attempt
+      await this.logFailedDonation({
+        user_id: userId,
+        organization_id: organizationId,
+        amount: amount,
+        error: error.message
+      });
+
+      throw error;
+    }
+  }
+
+  calculatePlatformFee(amount) {
+    /**
+     * Calculate platform fee (can be 0% for full transparency)
+     * Or use tiered structure
+     */
+    
+    // Option 1: No platform fee (most transparent)
+    return 0;
+
+    // Option 2: Flat percentage
+    // return 0.03; // 3%
+
+    // Option 3: Tiered (larger donations = lower fee)
+    // if (amount >= 1000) return 0.02;
+    // if (amount >= 100) return 0.03;
+    // return 0.05;
+  }
+
+  async getOrganization(organizationId) {
+    const result = await db.query(
+      'SELECT * FROM organizations WHERE id = $1',
+      [organizationId]
+    );
+    
+    if (!result.rows.length) {
+      throw new Error('Organization not found');
+    }
+    
+    return result.rows[0];
+  }
+
+  async getUserEmail(userId) {
+    const result = await db.query(
+      'SELECT email FROM users WHERE id = $1',
+      [userId]
+    );
+    return result.rows[0]?.email;
+  }
+
+  async storeDonation(donationData) {
+    const result = await db.query(`
+      INSERT INTO donations (
+        id, user_id, organization_id, conflict_id,
+        amount, currency, platform_fee, net_amount,
+        stripe_payment_intent_id, status, anonymous,
+        dedication_message, payment_method_type,
+        created_at
+      ) VALUES (
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW()
+      ) RETURNING *
+    `, [
+      donationData.id,
+      donationData.user_id,
+      donationData.organization_id,
+      donationData.conflict_id,
+      donationData.amount,
+      donationData.currency,
+      donationData.platform_fee,
+      donationData.net_amount,
+      donationData.stripe_payment_intent_id,
+      donationData.status,
+      donationData.anonymous,
+      donationData.dedication_message,
+      donationData.payment_method_type
+    ]);
+
+    return result.rows[0];
+  }
+
+  async sendDonationConfirmation(donation) {
+    /**
+     * Send email receipt and in-app notification
+     */
+    
+    // Queue email job
+    await emailQueue.add('donation-receipt', {
+      donation_id: donation.id,
+      user_id: donation.user_id
+    });
+
+    // Send push notification
+    await notificationService.send(donation.user_id, {
+      title: 'Donation Confirmed! 💚',
+      body: `Your $${donation.amount} donation has been processed`,
+      data: { type: 'donation_success', donation_id: donation.id }
+    });
+  }
+
+  async updateUserDonationStats(userId, amount) {
+    await db.query(`
+      UPDATE users
+      SET 
+        total_donated = total_donated + $2,
+        donation_count = donation_count + 1,
+        last_donation_at = NOW()
+      WHERE id = $1
+    `, [userId, amount]);
+  }
+
+  async checkAndAwardBadges(userId) {
+    /**
+     * Check if user earned any new badges
+     */
+    
+    const user = await db.query(
+      'SELECT total_donated, donation_count FROM users WHERE id = $1',
+      [userId]
+    );
+
+    const { total_donated, donation_count } = user.rows[0];
+
+    // First donation badge
+    if (donation_count === 1) {
+      await this.awardBadge(userId, 'first_donation');
+    }
+
+    // Milestone badges
+    if (total_donated >= 1000) {
+      await this.awardBadge(userId, 'philanthropist');
+    } else if (total_donated >= 500) {
+      await this.awardBadge(userId, 'generous_giver');
+    } else if (total_donated >= 100) {
+      await this.awardBadge(userId, 'supporter');
+    }
+  }
+
+  async awardBadge(userId, badgeType) {
+    await db.query(`
+      INSERT INTO user_badges (user_id, badge_type, earned_at)
+      VALUES ($1, $2, NOW())
+      ON CONFLICT (user_id, badge_type) DO NOTHING
+    `, [userId, badgeType]);
+  }
+}
+
+module.exports = DonationService;
+```
+
+---
+
+## 6. Recurring Donations (Subscriptions)
+
+### 6.1 Subscription Flow
+
+```
+User sets up recurring → Stripe creates Subscription → Monthly charges → Payouts to nonprofits → Monthly reports
+```
+
+### 6.2 Implementation
+
+```javascript
+// services/subscription_service.js
+const stripe = require('../config/stripe');
+
+class SubscriptionService {
+  /**
+   * Create recurring donation subscription
+   */
+  
+  async createRecurringDonation(subscriptionData) {
+    /**
+     * subscriptionData: {
+     *   userId, amount, currency,
+     *   paymentMethodId, frequency,
+     *   allocation_type, organization_ids
+     * }
+     */
+    
+    const {
+      userId,
+      amount,
+      currency = 'usd',
+      paymentMethodId,
+      frequency = 'monthly', // monthly, quarterly
+      allocation_type, // fixed_org, algorithm_driven, user_selected
+      organization_ids = []
+    } = subscriptionData;
+
+    // Validate
+    if (amount < 10) {
+      throw new Error('Minimum recurring donation is $10/month');
+    }
+
+    try {
+      // Get or create Stripe customer
+      const customerId = await this.getOrCreateCustomer(userId, paymentMethodId);
+
+      // Create price object (for subscription)
+      const price = await stripe.prices.create({
+        unit_amount: Math.round(amount * 100),
+        currency: currency,
+        recurring: {
+          interval: frequency === 'quarterly' ? 'month' : 'month',
+          interval_count: frequency === 'quarterly' ? 3 : 1
+        },
+        product_data: {
+          name: 'Monthly Humanitarian Donation',
+          statement_descriptor: 'HUMANITY FUND'
+        },
+        metadata: {
+          user_id: userId,
+          allocation_type: allocation_type
+        }
+      });
+
+      // Create subscription
+      const subscription = await stripe.subscriptions.create({
+        customer: customerId,
+        items: [{ price: price.id }],
+        default_payment_method: paymentMethodId,
+        metadata: {
+          user_id: userId,
+          allocation_type: allocation_type,
+          organization_ids: organization_ids.join(',')
+        },
+        // First charge happens immediately
+        billing_cycle_anchor: 'now',
+        // Email invoice to user
+        collection_method: 'charge_automatically'
+      });
+
+      // Store subscription in database
+      const recurringDonation = await this.storeRecurringDonation({
+        id: uuidv4(),
+        user_id: userId,
+        stripe_subscription_id: subscription.id,
+        stripe_price_id: price.id,
+        amount: amount,
+        currency: currency,
+        frequency: frequency,
+        allocation_type: allocation_type,
+        organization_ids: organization_ids,
+        status: 'active',
+        next_charge_date: new Date(subscription.current_period_end * 1000)
+      });
+
+      // Send confirmation
+      await this.sendSubscriptionConfirmation(recurringDonation);
+
+      return {
+        success: true,
+        subscription_id: recurringDonation.id,
+        stripe_subscription_id: subscription.id,
+        amount: amount,
+        frequency: frequency,
+        next_charge: subscription.current_period_end
+      };
+
+    } catch (error) {
+      console.error('Subscription creation error:', error);
+      throw error;
+    }
+  }
+
+  async getOrCreateCustomer(userId, paymentMethodId) {
+    /**
+     * Get existing Stripe customer or create new one
+     */
+    
+    // Check if user already has Stripe customer ID
+    const user = await db.query(
+      'SELECT stripe_customer_id, email, full_name FROM users WHERE id = $1',
+      [userId]
+    );
+
+    const userData = user.rows[0];
+
+    if (userData.stripe_customer_id) {
+      // Attach payment method to existing customer
+      await stripe.paymentMethods.attach(paymentMethodId, {
+        customer: userData.stripe_customer_id
+      });
+
+      return userData.stripe_customer_id;
+    }
+
+    // Create new customer
+    const customer = await stripe.customers.create({
+      email: userData.email,
+      name: userData.full_name,
+      payment_method: paymentMethodId,
+      invoice_settings: {
+        default_payment_method: paymentMethodId
+      },
+      metadata: {
+        user_id: userId
+      }
+    });
+
+    // Store customer ID
+    await db.query(
+      'UPDATE users SET stripe_customer_id = $1 WHERE id = $2',
+      [customer.id, userId]
+    );
+
+    return customer.id;
+  }
+
+  async storeRecurringDonation(data) {
+    const result = await db.query(`
+      INSERT INTO recurring_donations (
+        id, user_id, stripe_subscription_id, stripe_price_id,
+        amount, currency, frequency, allocation_type, organization_ids,
+        status, next_charge_date, created_at
+      ) VALUES (
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW()
+      ) RETURNING *
+    `, [
+      data.id,
+      data.user_id,
+      data.stripe_subscription_id,
+      data.stripe_price_id,
+      data.amount,
+      data.currency,
+      data.frequency,
+      data.allocation_type,
+      data.organization_ids,
+      data.status,
+      data.next_charge_date
+    ]);
+
+    return result.rows[0];
+  }
+
+  async allocateFunds(subscriptionId, amount) {
+    /**
+     * When recurring charge succeeds, allocate funds to organizations
+     */
+    
+    const subscription = await db.query(
+      'SELECT * FROM recurring_donations WHERE stripe_subscription_id = $1',
+      [subscriptionId]
+    );
+
+    const sub = subscription.rows[0];
+
+    if (sub.allocation_type === 'fixed_org') {
+      // Split evenly among selected organizations
+      await this.splitAmongOrganizations(sub.organization_ids, amount, sub.user_id);
+      
+    } else if (sub.allocation_type === 'algorithm_driven') {
+      // Use recommendation algorithm to select organizations
+      const recommendedOrgs = await this.getRecommendedOrganizations(sub.user_id);
+      await this.splitAmongOrganizations(recommendedOrgs, amount, sub.user_id);
+      
+    } else {
+      // user_selected: user picks monthly
+      // Store funds until user allocates
+      await this.storePendingAllocation(sub.user_id, amount);
+    }
+  }
+
+  async splitAmongOrganizations(organizationIds, amount, userId) {
+    /**
+     * Split donation amount among multiple organizations
+     */
+    
+    const perOrgAmount = amount / organizationIds.length;
+
+    for (const orgId of organizationIds) {
+      await this.createDonation({
+        userId: userId,
+        organizationId: orgId,
+        amount: perOrgAmount,
+        source: 'recurring_subscription'
+      });
+    }
+  }
+
+  async cancelSubscription(userId, subscriptionId) {
+    /**
+     * Cancel recurring donation
+     */
+    
+    const subscription = await db.query(
+      'SELECT stripe_subscription_id FROM recurring_donations WHERE id = $1 AND user_id = $2',
+      [subscriptionId, userId]
+    );
+
+    if (!subscription.rows.length) {
+      throw new Error('Subscription not found');
+    }
+
+    const stripeSubId = subscription.rows[0].stripe_subscription_id;
+
+    // Cancel in Stripe (at period end, so user gets full month)
+    await stripe.subscriptions.update(stripeSubId, {
+      cancel_at_period_end: true
+    });
+
+    // Update database
+    await db.query(`
+      UPDATE recurring_donations
+      SET status = 'cancelling', updated_at = NOW()
+      WHERE id = $1
+    `, [subscriptionId]);
+
+    return { success: true, message: 'Subscription will cancel at end of billing period' };
+  }
+
+  async updateSubscriptionAmount(userId, subscriptionId, newAmount) {
+    /**
+     * Update recurring donation amount
+     */
+    
+    const subscription = await db.query(
+      'SELECT stripe_subscription_id, stripe_price_id FROM recurring_donations WHERE id = $1 AND user_id = $2',
+      [subscriptionId, userId]
+    );
+
+    if (!subscription.rows.length) {
+      throw new Error('Subscription not found');
+    }
+
+    const { stripe_subscription_id, stripe_price_id } = subscription.rows[0];
+
+    // Create new price
+    const oldPrice = await stripe.prices.retrieve(stripe_price_id);
+    
+    const newPrice = await stripe.prices.create({
+      unit_amount: Math.round(newAmount * 100),
+      currency: oldPrice.currency,
+      recurring: oldPrice.recurring,
+      product: oldPrice.product
+    });
+
+    // Update subscription
+    const stripeSubscription = await stripe.subscriptions.retrieve(stripe_subscription_id);
+    
+    await stripe.subscriptions.update(stripe_subscription_id, {
+      items: [{
+        id: stripeSubscription.items.data[0].id,
+        price: newPrice.id
+      }],
+      proration_behavior: 'none' // Don't prorate, apply on next billing
+    });
+
+    // Update database
+    await db.query(`
+      UPDATE recurring_donations
+      SET amount = $1, stripe_price_id = $2, updated_at = NOW()
+      WHERE id = $3
+    `, [newAmount, newPrice.id, subscriptionId]);
+
+    return { success: true, new_amount: newAmount };
+  }
+}
+
+module.exports = SubscriptionService;
+```
+
+---
+
+## 7. Webhook Handling (Critical!)
+
+### 7.1 Why Webhooks Matter
+
+Stripe sends webhooks for events like:
+- Payment succeeded
+- Payment failed
+- Subscription renewed
+- Payout completed
+- Refund processed
+
+**You MUST handle these to keep your database in sync.**
+
+### 7.2 Implementation
+
+```javascript
+// routes/webhooks.js
+const express = require('express');
+const router = express.Router();
+const stripe = require('../config/stripe');
+
+// IMPORTANT: Use raw body for webhook signature verification
+router.post('/webhooks/stripe',
+  express.raw({ type: 'application/json' }),
+  async (req, res) => {
+    const sig = req.headers['stripe-signature'];
+    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+
+    let event;
+
+    try {
+      // Verify webhook signature
+      event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
+    } catch (err) {
+      console.error('Webhook signature verification failed:', err.message);
+      return res.status(400).send(`Webhook Error: ${err.message}`);
+    }
+
+    // Handle event
+    try {
+      await handleStripeWebhook(event);
+      res.json({ received: true });
+    } catch (error) {
+      console.error('Webhook handler error:', error);
+      res.status(500).json({ error: 'Webhook processing failed' });
+    }
+  }
+);
+
+async function handleStripeWebhook(event) {
+  console.log(`Webhook received: ${event.type}`);
+
+  switch (event.type) {
+    case 'payment_intent.succeeded':
+      await handlePaymentSuccess(event.data.object);
+      break;
+
+    case 'payment_intent.payment_failed':
+      await handlePaymentFailure(event.data.object);
+      break;
+
+    case 'invoice.payment_succeeded':
+      // Recurring donation charged successfully
+      await handleSubscriptionPayment(event.data.object);
+      break;
+
+    case 'invoice.payment_failed':
+      await handleSubscriptionPaymentFailure(event.data.object);
+      break;
+
+    case 'customer.subscription.deleted':
+      await handleSubscriptionCancelled(event.data.object);
+      break;
+
+    case 'account.updated':
+      // Connected account (nonprofit) status changed
+      await handleAccountUpdate(event.data.object);
+      break;
+
+    case 'transfer.created':
+      // Payout to nonprofit initiated
+      await handleTransferCreated(event.data.object);
+      break;
+
+    case 'transfer.paid':
+      // Payout to nonprofit completed
+      await handleTransferPaid(event.data.object);
+      break;
+
+    default:
+      console.log(`Unhandled event type: ${event.type}`);
+  }
+}
+
+async function handlePaymentSuccess(paymentIntent) {
+  // Update donation status
+  await db.query(`
+    UPDATE donations
+    SET status = 'succeeded', updated_at = NOW()
+    WHERE stripe_payment_intent_id = $1
+  `, [paymentIntent.id]);
+
+  console.log(`✓ Payment succeeded: ${paymentIntent.id}`);
+}
+
+async function handlePaymentFailure(paymentIntent) {
+  await db.query(`
+    UPDATE donations
+    SET status = 'failed', error_message = $2, updated_at = NOW()
+    WHERE stripe_payment_intent_id = $1
+  `, [paymentIntent.id, paymentIntent.last_payment_error?.message]);
+
+  // Notify user
+  const donation = await db.query(
+    'SELECT user_id FROM donations WHERE stripe_payment_intent_id = $1',
+    [paymentIntent.id]
+  );
+
+  if (donation.rows.length) {
+    await notificationService.send(donation.rows[0].user_id, {
+      title: 'Payment Failed',
+      body: 'Your donation could not be processed. Please update your payment method.',
+      data: { type: 'payment_failed', payment_intent_id: paymentIntent.id }
+    });
+  }
+}
+
+async function handleSubscriptionPayment(invoice) {
+  const subscriptionId = invoice.subscription;
+
+  // Create donation record for this charge
+  const subscription = await db.query(
+    'SELECT * FROM recurring_donations WHERE stripe_subscription_id = $1',
+    [subscriptionId]
+  );
+
+  if (subscription.rows.length) {
+    const sub = subscription.rows[0];
+
+    // Allocate funds
+    await subscriptionService.allocateFunds(
+      subscriptionId,
+      invoice.amount_paid / 100 // Convert from cents
+    );
+
+    // Update next charge date
+    await db.query(`
+      UPDATE recurring_donations
+      SET 
+        next_charge_date = to_timestamp($2),
+        last_charge_date = NOW(),
+        total_charged = total_charged + $3
+      WHERE stripe_subscription_id = $1
+    `, [subscriptionId, invoice.period_end, invoice.amount_paid / 100]);
+
+    console.log(`✓ Subscription payment processed: ${subscriptionId}`);
+  }
+}
+
+async function handleSubscriptionPaymentFailure(invoice) {
+  const subscriptionId = invoice.subscription;
+
+  await db.query(`
+    UPDATE recurring_donations
+    SET status = 'payment_failed', updated_at = NOW()
+    WHERE stripe_subscription_id = $1
+  `, [subscriptionId]);
+
+  // Notify user
+  const subscription = await db.query(
+    'SELECT user_id FROM recurring_donations WHERE stripe_subscription_id = $1',
+    [subscriptionId]
+  );
+
+  if (subscription.rows.length) {
+    await notificationService.send(subscription.rows[0].user_id, {
+      title: 'Recurring Donation Failed',
+      body

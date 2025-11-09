@@ -1,0 +1,122 @@
+// components/TrustBadge.jsx
+import React from 'react';
+import { View, Text, StyleSheet } from 'react-native';
+import { Badge, Tooltip } from 'react-native-paper';
+
+export default function TrustBadge({ organization }) {
+  const getTrustLevel = (score) => {
+    if (score >= 90) return { level: 'Exceptional', color: '#27AE60', icon: '🏆' };
+    if (score >= 80) return { level: 'Excellent', color: '#2ECC71', icon: '⭐' };
+    if (score >= 70) return { level: 'Good', color: '#3498DB', icon: '✓' };
+    if (score >= 60) return { level: 'Fair', color: '#F39C12', icon: '○' };
+    return { level: 'Limited', color: '#95A5A6', icon: '?' };
+  };
+
+  const trust = getTrustLevel(organization.trust_score);
+
+  return (
+    <View style={styles.container}>
+      <View style={[styles.badge, { backgroundColor: trust.color }]}>
+        <Text style={styles.icon}>{trust.icon}</Text>
+        <Text style={styles.score}>{organization.trust_score}</Text>
+      </View>
+      
+      <View style={styles.details}>
+        <Text style={styles.level}>{trust.level} Trust</Text>
+        
+        <View style={styles.indicators}>
+          {organization.charity_navigator_rating >= 3 && (
+            <Indicator 
+              icon="⭐" 
+              text={`${organization.charity_navigator_rating}/4 Stars`}
+              tooltip="Charity Navigator Rating"
+            />
+          )}
+          
+          {organization.guidestar_verified && (
+            <Indicator 
+              icon="✓" 
+              text="GuideStar Verified"
+              tooltip="Verified by GuideStar/Candid"
+            />
+          )}
+          
+          {organization.program_expense_percentage >= 75 && (
+            <Indicator 
+              icon="💰" 
+              text={`${Math.round(organization.program_expense_percentage)}% to Programs`}
+              tooltip="Percentage of funds going directly to programs"
+            />
+          )}
+          
+          {organization.verification_level === 3 && (
+            <Indicator 
+              icon="🛡️" 
+              text="Premium Verified"
+              tooltip="Highest level of verification"
+            />
+          )}
+        </View>
+      </View>
+    </View>
+  );
+}
+
+function Indicator({ icon, text, tooltip }) {
+  return (
+    <View style={styles.indicator}>
+      <Text style={styles.indicatorIcon}>{icon}</Text>
+      <Text style={styles.indicatorText}>{text}</Text>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flexDirection: 'row',
+    padding: 12,
+    backgroundColor: '#F9F9F9',
+    borderRadius: 8,
+    marginVertical: 8,
+  },
+  badge: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  icon: {
+    fontSize: 20,
+  },
+  score: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#FFF',
+  },
+  details: {
+    flex: 1,
+  },
+  level: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginBottom: 4,
+  },
+  indicators: {
+    flexDirection: 'column',
+    gap: 4,
+  },
+  indicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  indicatorIcon: {
+    fontSize: 14,
+    marginRight: 4,
+  },
+  indicatorText: {
+    fontSize: 12,
+    color: '#666',
+  },
+});

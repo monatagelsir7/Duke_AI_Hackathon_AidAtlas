@@ -1,0 +1,148 @@
+// services/notification_scheduler.js
+
+class NotificationScheduler {
+  /**
+   * Schedule notifications to keep users engaged
+   */
+  
+  setupScheduledNotifications() {
+    // Monthly report available
+    cron.schedule('0 9 1 * *', async () => {
+      // First day of month at 9 AM
+      await this.sendMonthlyReportNotifications();
+    });
+    
+    // Streak reminder
+    cron.schedule('0 18 28 * *', async () => {
+      // 28th of month at 6 PM
+      await this.sendStreakReminderNotifications();
+    });
+    
+    // New challenge available
+    cron.schedule('0 10 1 * *', async () => {
+      // First day of month at 10 AM
+      await this.sendNewChallengesNotifications();
+    });
+    
+    // Milestone approaching
+    cron.schedule('0 12 * * *', async () => {
+      // Daily at noon
+      await this.sendMilestoneReminderNotifications();
+    });
+  }
+  
+  async sendMonthlyReportNotifications() {
+    const users = await this.getActiveUsers();
+    
+    for (const user of users) {
+      await notificationService.send(user.id, {
+        title: '📊 Your Monthly Impact Report is Ready!',
+        body: 'See the amazing difference you made last month',
+        data: {
+          type: 'monthly_report',
+          action: 'open_report'
+        }
+      });
+    }
+  }
+  
+  async sendStreakReminderNotifications() {
+    // Users with active streaks who haven't donated this month
+    const users = await db.query(`
+      SELECT DISTINCT u.id, u.fcm_token
+      FROM users u
+      WHERE EXISTS (
+        SELECT 1 FROM donations d
+        WHERE d.user_id = u.id
+        AND DATE_TRUNC('month', d.created_at) = DATE_TRUNC('month', NOW() - INTERVAL '1 month')
+        AND d.status = 'succeeded'
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM donations d2
+        WHERE d2.user_id = u.id
+        AND DATE_TRUNC('month', d2.created_at) = DATE_TRUNC('month', NOW())
+        AND d2.status = 'succeeded'
+      )
+      AND u.fcm_token IS NOT NULL
+    `);
+    
+    for (const user of users.rows) {
+      await notificationService.send(user.id, {
+        title: '🔥 Don\'t Break Your Streak!',
+        body: 'You have 3 days left to maintain your donation streak',
+        data: {
+          type: 'streak_reminder',
+          action: 'open_donate'
+        }
+      });
+    }
+  }
+  
+  async sendNewChallengesNotifications() {
+    const users = await this.getActiveUsers();
+    
+    for (const user of users) {
+      await notificationService.send(user.id, {
+        title: '🎯 New Monthly Challenges Available!',
+        body: 'Complete challenges to earn badges and points',
+        data: {
+          type: 'new_challenges',
+          action: 'open_challenges'
+        }
+      });
+    }
+  }
+  
+  async sendMilestoneReminderNotifications() {
+    // Users close to next milestone
+    const users = await db.query(`
+      SELECT 
+        u.id,
+        u.fcm_token,
+        COUNT(d.id) as donation_count
+      FROM users u
+      JOIN donations d ON u.id = d.user_id
+      WHERE d.status = 'succeeded'
+      GROUP BY u.id, u.fcm_token
+      HAVING COUNT(d.id) IN (4, 9, 24, 49, 99)
+      AND u.fcm_token IS NOT NULL
+    `);
+    
+    for (const user of users.rows) {
+      const nextMilestone = this.getNextMilestone(user.donation_count);
+      
+      await notificationService.send(user.id, {
+        title: '🎖️ You\'re Almost There!',
+        body: `Just 1 more donation to unlock "${nextMilestone.name}"`,
+        data: {
+          type: 'milestone_approaching',
+          action: 'open_donate'
+        }
+      });
+    }
+  }
+  
+  getNextMilestone(count) {
+    const milestones = {
+      4: { name: 'Consistent Supporter', icon: '🌿' },
+      9: { name: 'Committed Helper', icon: '🌳' },
+      24: { name: 'Change Maker', icon: '🌲' },
+      49: { name: 'Impact Champion', icon: '🌴' },
+      99: { name: 'Humanitarian Hero', icon: '🏆' }
+    };
+    return milestones[count];
+  }
+  
+  async getActiveUsers() {
+    const result = await db.query(`
+      SELECT id, fcm_token
+      FROM users
+      WHERE fcm_token IS NOT NULL
+      AND account_status = 'active'
+      AND notification_preferences->>'monthly_report' = 'true'
+    `);
+    return result.rows;
+  }
+}
+
+module.exports = NotificationScheduler;

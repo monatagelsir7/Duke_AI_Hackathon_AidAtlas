@@ -1,0 +1,924 @@
+# AI-Powered Content Generation & Summarization System
+
+## 1. System Architecture Overview
+
+```
+[Verified Sources] → [Content Collector] → [AI Processing Pipeline] → [Quality Control] → [User-Facing Content]
+                                                     ↓
+                                    [Multi-step Refinement Process]
+                                                     ↓
+                           [Fact-Checking] → [Bias Detection] → [Emotional Tone Analysis]
+```
+
+---
+
+## 2. Content Generation Requirements
+
+### What Needs to be Generated:
+
+1. **Conflict Profile Card** (User Swipe Interface)
+   - Headline (40-60 chars)
+   - Summary (150-200 words)
+   - Impact breakdown by group (3-5 groups)
+   - Key needs visualization
+   - Emotional tone: Empathetic but not exploitative
+
+2. **Detailed View** (After Swipe Up)
+   - Extended summary (300-500 words)
+   - Timeline of events
+   - Current situation
+   - How organizations are helping
+   - Ways to take action
+
+3. **Organization Profiles**
+   - What they do (100 words)
+   - Impact metrics
+   - Trust indicators
+   - How donations are used
+
+4. **Impact Reports** (Monthly)
+   - Donation summary
+   - Stories from the field
+   - Visual data representation
+   - Personalized messaging
+
+5. **Action Items** (Protests, Petitions)
+   - Event descriptions
+   - Why it matters
+   - How to participate
+
+---
+
+## 3. Multi-Stage AI Processing Pipeline
+
+### Stage 1: Content Collection & Preprocessing
+
+```python
+# pipeline/content_collector.py
+import re
+from bs4 import BeautifulSoup
+from langdetect import detect
+import spacy
+
+class ContentCollector:
+    """
+    Collect and preprocess content from various sources
+    """
+    
+    def __init__(self):
+        self.nlp = spacy.load('en_core_web_sm')
+    
+    def collect_articles(self, conflict_data):
+        """
+        Gather all relevant articles for a conflict
+        """
+        articles = []
+        
+        # ReliefWeb reports
+        if 'reports' in conflict_data:
+            for report in conflict_data['reports']:
+                article = self.preprocess_article({
+                    'title': report['title'],
+                    'body': report['body'],
+                    'source': 'UN OCHA ReliefWeb',
+                    'url': report['url'],
+                    'date': report['date'],
+                    'credibility': 'verified_un',
+                    'article_type': 'humanitarian_report'
+                })
+                articles.append(article)
+        
+        # ACLED data (convert to narrative)
+        if 'acled_data' in conflict_data:
+            acled_narrative = self.acled_to_narrative(conflict_data['acled_data'])
+            articles.append({
+                'title': 'Conflict Events Summary',
+                'body': acled_narrative,
+                'source': 'ACLED',
+                'credibility': 'verified_academic',
+                'article_type': 'statistical_summary'
+            })
+        
+        # News articles
+        if 'news_articles' in conflict_data:
+            for news in conflict_data['news_articles'][:10]:  # Limit to 10 most recent
+                article = self.preprocess_article({
+                    'title': news['title'],
+                    'body': news.get('content', ''),
+                    'source': news['source'],
+                    'url': news['url'],
+                    'date': news['published'],
+                    'credibility': 'news_media',
+                    'article_type': 'news'
+                })
+                articles.append(article)
+        
+        return articles
+    
+    def preprocess_article(self, article):
+        """
+        Clean and prepare article for AI processing
+        """
+        # Extract text from HTML if needed
+        if '<html>' in article['body'] or '<div>' in article['body']:
+            soup = BeautifulSoup(article['body'], 'html.parser')
+            article['body'] = soup.get_text()
+        
+        # Remove excessive whitespace
+        article['body'] = re.sub(r'\s+', ' ', article['body']).strip()
+        
+        # Detect language (reject non-English for now)
+        try:
+            lang = detect(article['body'])
+            if lang != 'en':
+                article['needs_translation'] = True
+        except:
+            pass
+        
+        # Extract key entities (locations, organizations, people)
+        article['entities'] = self.extract_entities(article['body'])
+        
+        # Calculate readability score
+        article['readability'] = self.calculate_readability(article['body'])
+        
+        # Estimate article sentiment (for bias detection)
+        article['sentiment'] = self.analyze_sentiment(article['body'])
+        
+        return article
+    
+    def extract_entities(self, text):
+        """
+        Extract named entities using spaCy
+        """
+        doc = self.nlp(text[:10000])  # Limit to 10k chars for performance
+        
+        entities = {
+            'locations': [],
+            'organizations': [],
+            'persons': [],
+            'dates': []
+        }
+        
+        for ent in doc.ents:
+            if ent.label_ == 'GPE' or ent.label_ == 'LOC':
+                entities['locations'].append(ent.text)
+            elif ent.label_ == 'ORG':
+                entities['organizations'].append(ent.text)
+            elif ent.label_ == 'PERSON':
+                entities['persons'].append(ent.text)
+            elif ent.label_ == 'DATE':
+                entities['dates'].append(ent.text)
+        
+        # Deduplicate
+        for key in entities:
+            entities[key] = list(set(entities[key]))
+        
+        return entities
+    
+    def acled_to_narrative(self, acled_data):
+        """
+        Convert ACLED statistics into readable narrative
+        """
+        narrative = f"""In the past 7 days, {acled_data['event_count']} conflict-related events have been recorded, 
+        resulting in {acled_data['fatalities']} reported fatalities. 
+        Event types include: {', '.join(acled_data['event_types'])}. 
+        Key locations affected: {', '.join(acled_data['locations'][:5])}."""
+        
+        return narrative
+    
+    def calculate_readability(self, text):
+        """
+        Calculate Flesch Reading Ease score
+        """
+        # Simplified implementation
+        sentences = text.count('.') + text.count('!') + text.count('?')
+        words = len(text.split())
+        syllables = sum([self.count_syllables(word) for word in text.split()])
+        
+        if sentences == 0 or words == 0:
+            return 0
+        
+        score = 206.835 - 1.015 * (words / sentences) - 84.6 * (syllables / words)
+        return max(0, min(100, score))
+    
+    def count_syllables(self, word):
+        """
+        Estimate syllable count
+        """
+        word = word.lower()
+        vowels = 'aeiouy'
+        syllable_count = 0
+        previous_was_vowel = False
+        
+        for char in word:
+            is_vowel = char in vowels
+            if is_vowel and not previous_was_vowel:
+                syllable_count += 1
+            previous_was_vowel = is_vowel
+        
+        if word.endswith('e'):
+            syllable_count -= 1
+        if syllable_count == 0:
+            syllable_count = 1
+        
+        return syllable_count
+    
+    def analyze_sentiment(self, text):
+        """
+        Basic sentiment analysis (positive/negative/neutral)
+        """
+        from textblob import TextBlob
+        
+        blob = TextBlob(text[:5000])  # Limit for performance
+        polarity = blob.sentiment.polarity
+        
+        if polarity > 0.1:
+            return 'positive'
+        elif polarity < -0.1:
+            return 'negative'
+        else:
+            return 'neutral'
+```
+
+---
+
+### Stage 2: Initial Content Generation with Claude
+
+```python
+# pipeline/content_generator.py
+import anthropic
+import json
+from typing import List, Dict
+
+class ConflictContentGenerator:
+    """
+    Generate user-facing content using Claude API
+    """
+    
+    def __init__(self, api_key):
+        self.client = anthropic.Anthropic(api_key=api_key)
+    
+    def generate_swipe_card(self, conflict_data, articles):
+        """
+        Generate the brief card content for swipe interface
+        """
+        
+        # Prepare context
+        context = self._prepare_context(conflict_data, articles, max_length=5000)
+        
+        prompt = f"""You are a humanitarian content writer creating engaging, accurate content for a donation app. 
+
+Your task: Create a brief profile card for users to swipe through.
+
+TONE GUIDELINES:
+- Empathetic but not exploitative
+- Factual and grounded in sources
+- Human-centered (focus on people, not politics)
+- Hopeful but honest
+- Avoid sensationalism or "poverty porn"
+- Use active voice and clear language
+
+SOURCE MATERIAL:
+{json.dumps(context, indent=2)}
+
+Generate a JSON response with this structure:
+{{
+  "headline": "Brief, impactful title (40-60 characters)",
+  "summary": "2-3 sentence overview that hooks the reader without being sensational (150-200 words)",
+  "affected_groups": [
+    {{
+      "group": "children/women/elderly/refugees",
+      "count": "Number affected (e.g., '2.3 million children')",
+      "impact": "One specific, concrete impact (30-40 words)",
+      "urgency": "critical/high/moderate"
+    }}
+  ],
+  "key_needs": [
+    {{
+      "need": "food/water/shelter/medical/education/protection",
+      "description": "Brief context (20-30 words)",
+      "icon": "emoji or icon name"
+    }}
+  ],
+  "emotional_hook": "One sentence that makes this personal and relatable",
+  "sources_used": ["List source IDs"],
+  "content_warnings": ["List any sensitive content (violence, death, etc.)"]
+}}
+
+CRITICAL RULES:
+1. Every statistic must come from the sources provided
+2. Use "people" and "families" language, not just numbers
+3. Focus on impact and needs, not the political conflict
+4. Include hope: mention ongoing aid efforts
+5. Keep it digestible: users will read this in 10-15 seconds
+
+Example of good vs bad:
+❌ BAD: "Devastating war leaves millions suffering"
+✅ GOOD: "2.3 million families need shelter after displacement"
+
+❌ BAD: "Children are dying from lack of medical care"
+✅ GOOD: "Medical facilities need support to treat 50,000 children"
+
+Generate the card content now:"""
+
+        # Call Claude
+        response = self.client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=2000,
+            temperature=0.3,  # Some creativity, but mostly factual
+            messages=[{"role": "user", "content": prompt}]
+        )
+        
+        # Parse response
+        card_content = self._extract_json(response.content[0].text)
+        
+        # Validate
+        validation = self._validate_card_content(card_content, articles)
+        
+        return {
+            'content': card_content,
+            'validation': validation,
+            'raw_response': response.content[0].text
+        }
+    
+    def generate_detailed_view(self, conflict_data, articles, card_content):
+        """
+        Generate extended content for detail view after swipe up
+        """
+        
+        context = self._prepare_context(conflict_data, articles, max_length=10000)
+        
+        prompt = f"""You are writing an in-depth profile for users who want to learn more before donating.
+
+PREVIOUSLY GENERATED CARD:
+{json.dumps(card_content, indent=2)}
+
+FULL SOURCE MATERIAL:
+{json.dumps(context, indent=2)}
+
+Generate a JSON response:
+{{
+  "extended_summary": "Comprehensive overview (300-500 words) that provides context without being overwhelming",
+  "timeline": [
+    {{
+      "date": "Date or period",
+      "event": "Brief description",
+      "significance": "Why this matters for understanding current situation"
+    }}
+  ],
+  "current_situation": {{
+    "overview": "What's happening right now (100-150 words)",
+    "recent_developments": ["2-3 recent updates"],
+    "outlook": "What humanitarian experts say about the near future"
+  }},
+  "how_organizations_help": [
+    {{
+      "intervention_type": "food/medical/shelter/education/protection",
+      "description": "What organizations are doing (50-75 words)",
+      "impact_example": "Specific example of impact",
+      "gaps": "What's still needed"
+    }}
+  ],
+  "personal_stories": [
+    {{
+      "story_type": "beneficiary/aid_worker/local_leader",
+      "summary": "Brief, humanizing story from sources (75-100 words)",
+      "source": "Which source this came from"
+    }}
+  ],
+  "context_background": {{
+    "root_causes": "Brief explanation of underlying factors (100 words)",
+    "key_actors": "Who's involved (avoid political bias)",
+    "regional_impact": "How this affects neighboring areas"
+  }},
+  "ways_to_help": {{
+    "donation_impact": "What a typical donation can provide (concrete examples)",
+    "other_actions": ["Non-financial ways to support"]
+  }}
+}}
+
+TONE: Informative but accessible. Imagine explaining to a friend who cares but doesn't follow international news closely.
+
+RULES:
+- Build on the card content, don't contradict it
+- Add depth and context, not just more statistics
+- Include human stories when available in sources
+- Explain complex situations simply
+- Maintain empathy without manipulation
+- All facts must trace to sources"""
+
+        response = self.client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=3000,
+            temperature=0.3,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        
+        detailed_content = self._extract_json(response.content[0].text)
+        
+        return detailed_content
+    
+    def generate_organization_profile(self, organization_data, conflict_context):
+        """
+        Generate organization profile for the conflict context
+        """
+        
+        prompt = f"""Create a profile for this organization working in the current conflict.
+
+ORGANIZATION DATA:
+{json.dumps(organization_data, indent=2)}
+
+CONFLICT CONTEXT:
+{json.dumps(conflict_context, indent=2)}
+
+Generate JSON:
+{{
+  "headline": "What they do in one sentence",
+  "description": "Clear explanation of their work (100 words)",
+  "specific_programs": [
+    {{
+      "program_name": "Name",
+      "description": "What it does (40 words)",
+      "beneficiaries": "Who it helps"
+    }}
+  ],
+  "impact_metrics": [
+    {{
+      "metric": "Families housed / Children fed / etc.",
+      "value": "Number",
+      "timeframe": "Past month/year/etc.",
+      "source": "Where this data comes from"
+    }}
+  ],
+  "trust_indicators": {{
+    "charity_navigator_rating": "X/4 stars",
+    "overhead_percentage": "X%",
+    "transparency_score": "Description",
+    "years_operating": "Number",
+    "local_leadership": "Yes/No with explanation"
+  }},
+  "donation_breakdown": {{
+    "example_amounts": [
+      {{"amount": 25, "provides": "Specific impact"}},
+      {{"amount": 50, "provides": "Specific impact"}},
+      {{"amount": 100, "provides": "Specific impact"}}
+    ],
+    "allocation": "How donations are split (programs/overhead/fundraising)"
+  }},
+  "why_trust_them": "2-3 sentence explanation of credibility"
+}}
+
+TONE: Build trust through transparency and specificity, not emotional manipulation."""
+
+        response = self.client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=2000,
+            temperature=0.2,  # Very factual for trust-building content
+            messages=[{"role": "user", "content": prompt}]
+        )
+        
+        org_profile = self._extract_json(response.content[0].text)
+        
+        return org_profile
+    
+    def _prepare_context(self, conflict_data, articles, max_length=5000):
+        """
+        Prepare context for Claude while staying within token limits
+        """
+        context = {
+            'country': conflict_data.get('country_name'),
+            'country_code': conflict_data.get('country_code'),
+            'sources': []
+        }
+        
+        # Prioritize authoritative sources
+        articles_sorted = sorted(
+            articles,
+            key=lambda x: {
+                'verified_un': 0,
+                'verified_academic': 1,
+                'news_media': 2
+            }.get(x.get('credibility', 'news_media'), 3)
+        )
+        
+        current_length = 0
+        for article in articles_sorted:
+            article_text = f"{article['title']}\n{article['body'][:2000]}"
+            if current_length + len(article_text) < max_length:
+                context['sources'].append({
+                    'id': f"source_{len(context['sources'])}",
+                    'title': article['title'],
+                    'source_name': article['source'],
+                    'credibility': article['credibility'],
+                    'content': article['body'][:2000],
+                    'date': article.get('date'),
+                    'url': article.get('url')
+                })
+                current_length += len(article_text)
+        
+        return context
+    
+    def _extract_json(self, text):
+        """
+        Extract JSON from Claude response (handles markdown code blocks)
+        """
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            # Try to extract from markdown
+            if "```json" in text:
+                json_text = text.split("```json")[1].split("```")[0].strip()
+                return json.loads(json_text)
+            elif "```" in text:
+                json_text = text.split("```")[1].split("```")[0].strip()
+                return json.loads(json_text)
+            else:
+                raise ValueError("Could not parse JSON from response")
+    
+    def _validate_card_content(self, card_content, articles):
+        """
+        Basic validation of generated card
+        """
+        issues = []
+        
+        # Check headline length
+        if len(card_content.get('headline', '')) > 60:
+            issues.append("Headline too long")
+        
+        # Check summary length
+        summary_words = len(card_content.get('summary', '').split())
+        if summary_words < 30 or summary_words > 80:
+            issues.append(f"Summary length suboptimal: {summary_words} words")
+        
+        # Check affected groups
+        if len(card_content.get('affected_groups', [])) < 1:
+            issues.append("No affected groups specified")
+        
+        # Check key needs
+        if len(card_content.get('key_needs', [])) < 2:
+            issues.append("Need more key needs (minimum 2)")
+        
+        return {
+            'valid': len(issues) == 0,
+            'issues': issues
+        }
+```
+
+---
+
+### Stage 3: Fact-Checking & Bias Detection
+
+```python
+# pipeline/fact_checker.py
+import re
+from typing import List, Dict
+
+class ContentFactChecker:
+    """
+    Verify that generated content is factually accurate
+    """
+    
+    def __init__(self, anthropic_client):
+        self.client = anthropic_client
+    
+    def fact_check_content(self, generated_content, source_articles):
+        """
+        Cross-reference generated content against sources
+        """
+        
+        # Extract all factual claims from generated content
+        claims = self._extract_factual_claims(generated_content)
+        
+        # Verify each claim against sources
+        verification_results = []
+        
+        for claim in claims:
+            result = self._verify_claim(claim, source_articles)
+            verification_results.append(result)
+        
+        # Generate fact-check report
+        report = {
+            'total_claims': len(claims),
+            'verified_claims': sum(1 for r in verification_results if r['verified']),
+            'unverified_claims': sum(1 for r in verification_results if not r['verified']),
+            'confidence_score': self._calculate_confidence(verification_results),
+            'flagged_issues': [r for r in verification_results if not r['verified']],
+            'details': verification_results
+        }
+        
+        return report
+    
+    def _extract_factual_claims(self, content):
+        """
+        Extract specific factual claims (numbers, dates, events)
+        """
+        claims = []
+        
+        # Extract from summary
+        if 'summary' in content:
+            claims.extend(self._extract_claims_from_text(content['summary']))
+        
+        # Extract from affected groups
+        if 'affected_groups' in content:
+            for group in content['affected_groups']:
+                if 'count' in group:
+                    claims.append({
+                        'type': 'statistic',
+                        'claim': f"{group['count']} {group['group']} affected",
+                        'value': group['count'],
+                        'context': group.get('impact', '')
+                    })
+        
+        # Extract from extended content if present
+        if 'extended_summary' in content:
+            claims.extend(self._extract_claims_from_text(content['extended_summary']))
+        
+        return claims
+    
+    def _extract_claims_from_text(self, text):
+        """
+        Use regex and NLP to find factual claims
+        """
+        claims = []
+        
+        # Find numbers with context
+        number_pattern = r'(\d+(?:,\d+)*(?:\.\d+)?)\s*(million|thousand|billion)?\s+(\w+)'
+        matches = re.finditer(number_pattern, text)
+        
+        for match in matches:
+            claims.append({
+                'type': 'statistic',
+                'claim': match.group(0),
+                'value': match.group(1),
+                'unit': match.group(2),
+                'subject': match.group(3)
+            })
+        
+        # Find date references
+        date_pattern = r'(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+\d{4}'
+        date_matches = re.finditer(date_pattern, text)
+        
+        for match in date_matches:
+            claims.append({
+                'type': 'date',
+                'claim': match.group(0)
+            })
+        
+        return claims
+    
+    def _verify_claim(self, claim, source_articles):
+        """
+        Check if claim is supported by sources
+        """
+        # Search for claim in sources
+        claim_text = claim.get('claim', '').lower()
+        found_in_sources = []
+        
+        for article in source_articles:
+            article_text = article.get('body', '').lower()
+            
+            # Simple substring match (could be improved with semantic similarity)
+            if claim_text in article_text or self._semantic_match(claim_text, article_text):
+                found_in_sources.append({
+                    'source': article.get('source'),
+                    'credibility': article.get('credibility'),
+                    'url': article.get('url')
+                })
+        
+        return {
+            'claim': claim,
+            'verified': len(found_in_sources) > 0,
+            'supporting_sources': found_in_sources,
+            'confidence': 'high' if len(found_in_sources) >= 2 else 'medium' if len(found_in_sources) == 1 else 'low'
+        }
+    
+    def _semantic_match(self, claim, text):
+        """
+        Check for semantic similarity (simplified)
+        Could use sentence embeddings for better results
+        """
+        # Extract key terms from claim
+        claim_terms = set(re.findall(r'\b\w+\b', claim.lower()))
+        text_terms = set(re.findall(r'\b\w+\b', text.lower()))
+        
+        # Calculate overlap
+        overlap = len(claim_terms & text_terms)
+        similarity = overlap / len(claim_terms) if claim_terms else 0
+        
+        return similarity > 0.6
+    
+    def _calculate_confidence(self, verification_results):
+        """
+        Calculate overall confidence score
+        """
+        if not verification_results:
+            return 0.0
+        
+        verified_count = sum(1 for r in verification_results if r['verified'])
+        return verified_count / len(verification_results)
+    
+    def detect_bias(self, content, source_articles):
+        """
+        Detect potential bias in generated content
+        """
+        
+        prompt = f"""You are a bias detection expert. Analyze this humanitarian content for potential bias.
+
+GENERATED CONTENT:
+{json.dumps(content, indent=2)}
+
+ORIGINAL SOURCES:
+{json.dumps([{
+            'source': a.get('source'),
+            'sentiment': a.get('sentiment'),
+            'credibility': a.get('credibility')
+        } for a in source_articles], indent=2)}
+
+Analyze for these types of bias:
+1. **Political bias**: Favoring one side in a conflict
+2. **Sensationalism**: Exaggerating for emotional impact
+3. **Saviorism**: Portraying affected people as helpless victims
+4. **Selection bias**: Overemphasizing certain groups while ignoring others
+5. **Source bias**: Relying too heavily on one perspective
+
+Generate JSON:
+{{
+  "bias_detected": true/false,
+  "bias_types": [
+    {{
+      "type": "political/sensationalism/saviorism/selection/source",
+      "severity": "low/medium/high",
+      "evidence": "Specific example from content",
+      "recommendation": "How to fix it"
+    }}
+  ],
+  "overall_assessment": "Brief summary",
+  "content_balance_score": 0.0-1.0
+}}"""
+
+        response = self.client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=1500,
+            temperature=0.1,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        
+        bias_analysis = self._extract_json(response.content[0].text)
+        
+        return bias_analysis
+    
+    def _extract_json(self, text):
+        """Extract JSON from response"""
+        try:
+            return json.loads(text)
+        except:
+            if "```json" in text:
+                json_text = text.split("```json")[1].split("```")[0].strip()
+                return json.loads(json_text)
+            raise
+```
+
+---
+
+### Stage 4: Content Refinement Based on Feedback
+
+```python
+# pipeline/content_refiner.py
+
+class ContentRefiner:
+    """
+    Refine content based on fact-checking and bias detection results
+    """
+    
+    def __init__(self, anthropic_client):
+        self.client = anthropic_client
+    
+    def refine_content(self, original_content, fact_check_report, bias_analysis):
+        """
+        Regenerate content addressing identified issues
+        """
+        
+        if fact_check_report['confidence_score'] > 0.9 and not bias_analysis['bias_detected']:
+            # Content is good, no refinement needed
+            return {
+                'refined': False,
+                'content': original_content,
+                'reason': 'Content passed all quality checks'
+            }
+        
+        # Prepare feedback for LLM
+        feedback = {
+            'fact_check_issues': fact_check_report.get('flagged_issues', []),
+            'bias_issues': bias_analysis.get('bias_types', []),
+            'confidence_score': fact_check_report['confidence_score']
+        }
+        
+        prompt = f"""The following content needs refinement based on quality control feedback.
+
+ORIGINAL CONTENT:
+{json.dumps(original_content, indent=2)}
+
+QUALITY CONTROL FEEDBACK:
+{json.dumps(feedback, indent=2)}
+
+Your task: Regenerate the content addressing all identified issues.
+
+SPECIFIC INSTRUCTIONS:
+1. Remove or rephrase any unverified claims
+2. Correct any biased language
+3. Maintain the same JSON structure
+4. Keep the tone empathetic but factual
+5. Do not add new claims without source support
+
+Generate the refined content in the same JSON format as the original."""
+
+        response = self.client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=2500,
+            temperature=0.2,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        
+        refined_content = self._extract_json(response.content[0].text)
+        
+        return {
+            'refined': True,
+            'content': refined_content,
+            'original': original_content,
+            'changes': self._identify_changes(original_content, refined_content)
+        }
+    
+    def _identify_changes(self, original, refined):
+        """
+        Identify what changed between versions
+        """
+        changes = []
+        
+        # Compare headlines
+        if original.get('headline') != refined.get('headline'):
+            changes.append({
+                'field': 'headline',
+                'old': original.get('headline'),
+                'new': refined.get('headline')
+            })
+        
+        # Compare summaries
+        if original.get('summary') != refined.get('summary'):
+            changes.append({
+                'field': 'summary',
+                'old': original.get('summary'),
+                'new': refined.get('summary')
+            })
+        
+        return changes
+    
+    def _extract_json(self, text):
+        """Extract JSON from response"""
+        try:
+            return json.loads(text)
+        except:
+            if "```json" in text:
+                json_text = text.split("```json")[1].split("```")[0].strip()
+                return json.loads(json_text)
+            raise
+```
+
+---
+
+## 4. Complete Pipeline Orchestration
+
+```python
+# pipeline/orchestrator.py
+
+class ContentGenerationPipeline:
+    """
+    Orchestrate the complete content generation process
+    """
+    
+    def __init__(self, anthropic_api_key):
+        self.collector = ContentCollector()
+        self.generator = ConflictContentGenerator(anthropic_api_key)
+        self.fact_checker = ContentFactChecker(self.generator.client)
+        self.refiner = ContentRefiner(self.generator.client)
+    
+    def generate_complete_profile(self, conflict_data):
+        """
+        Generate complete conflict profile with all content types
+        """
+        
+        print(f"🔄 Starting content generation for {conflict_data['country_name']}...")
+        
+        # Stage 1: Collect and preprocess articles
+        print("📥 Collecting articles...")
+        articles = self.collector.collect_articles(conflict_data)
+        print(f"   ✓ Collected {len(articles)} articles")
+        
+        # Stage 2: Generate swipe card
+        print("✍️  Generating swipe card...")
+        card_result = self.generator.generate_swipe_card(conflict_data, articles)
+        card_content = card_result['content']
+        print(f"   ✓ Card generated")
+        
+        # Stage 3: Fact-check card
+        print("🔍 Fact-checking card content...")
+        fact_check = self.fact_checker.

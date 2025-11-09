@@ -1,0 +1,217 @@
+The Details modal design is perfect, but every field shows "Data unavailable" even though we have real conflicts. We need to populate the Key Statistics with accurate data from trusted sources.
+
+IMMEDIATE FIX - POPULATE DETAILS DATA:
+
+For each of the 31 conflicts in the database, we need to add detailed statistics. Use this approach:
+
+1. USE EXISTING RELIEFWEB DATA:
+   - You already scraped ReliefWeb for these conflicts
+   - Check the scraped_content table or wherever you stored the ReliefWeb API responses
+   - Extract the statistics that are already there:
+     * "figures" field → people affected, displaced, refugees numbers
+     * "date.created" or earliest report → crisis start date
+     * "theme" field → humanitarian needs (food, medical, shelter, water, protection)
+   - Parse this data and add it to the conflicts table
+
+2. IF RELIEFWEB DATA ISN'T STORED PROPERLY:
+   For each conflict, make a targeted ReliefWeb API call to get current statistics:
+   
+   POST https://api.reliefweb.int/v1/reports
+   {
+     "appname": "aidatlas-humanitarian-app",
+     "profile": "full",
+     "query": {
+       "value": "country.iso3:NGA", // Use country code for each conflict
+       "operator": "AND"
+     },
+     "fields": {
+       "include": ["title", "body", "date", "theme", "vulnerable_groups", "disaster"]
+     },
+     "limit": 5
+   }
+   
+   From the response, extract:
+   - Numbers mentioned in the body text (X million affected, Y displaced, etc.)
+   - Themes → map to our Primary Needs
+   - Vulnerable groups → already have this
+   - Earliest date.created → crisis began date
+
+3. USE OPENAI API TO EXTRACT STATISTICS:
+   You already have OpenAI API key configured. For each conflict, if ReliefWeb data exists:
+   
+   Send this prompt to OpenAI (using GPT-4 or GPT-3.5-turbo):
+```javascript
+   const response = await openai.chat.completions.create({
+     model: "gpt-4-turbo-preview", // or gpt-3.5-turbo
+     temperature: 0.1, // Low temperature for factual extraction
+     messages: [{
+       role: "system",
+       content: "You are a humanitarian data analyst. Extract only factual statistics explicitly stated in source documents. Never estimate or infer."
+     }, {
+       role: "user",
+       content: `Extract humanitarian statistics from these UN OCHA ReliefWeb reports about ${country}:
+       
+       ${reliefWebReportBodies}
+       
+       Extract ONLY facts explicitly stated in the reports. Return valid JSON only:
+       {
+         "peopleAffected": "number with unit (e.g. '8.3 million') or null",
+         "internallyDisplaced": "number with unit or null", 
+         "refugeesAbroad": "number with unit or null",
+         "crisisStartYear": "YYYY or null",
+         "primaryNeeds": ["array of: Food Security, Medical Care, Shelter, Clean Water, Education, Protection"],
+         "sources": ["which report each fact came from"]
+       }
+       
+       CRITICAL RULES:
+       - Only extract numbers explicitly stated in reports
+       - If not mentioned, return null (don't estimate or assume)
+       - Include the unit (million, thousand, etc.)
+       - Cite which report each statistic came from
+       - Your ENTIRE response must be valid JSON, nothing else`
+     }]
+   });
+   
+   const stats = JSON.parse(response.choices[0].message.content);
+```
+   
+   Use OpenAI API with low temperature (0.1) for factual extraction.
+
+4. UPDATE DATABASE SCHEMA:
+   Add these columns to the conflicts table if they don't exist:
+   - peopleAffected (TEXT - store as "8.3 million" or null)
+   - internallyDisplaced (TEXT - or null)
+   - refugeesAbroad (TEXT - or null)  
+   - crisisStartYear (TEXT - "2009" or null)
+   - primaryNeeds (JSONB array - ["Food Security", "Medical Care", "Shelter"])
+   - detailsLastUpdated (TIMESTAMP)
+
+5. POPULATE DATA FOR ALL 31 CONFLICTS:
+   Run a migration/update script that:
+   - For each conflict in database
+   - Fetches ReliefWeb reports for that country (use existing scraper or make new API call)
+   - Uses OpenAI API to extract statistics from reports
+   - Parses the JSON response from OpenAI
+   - Updates the database with extracted data
+   - If extraction finds nothing → leaves as null (will show "Data unavailable")
+   - Logs progress: "Updated Nigeria: 8.3M affected, 2M displaced"
+
+6. ALTERNATIVE - WEB SEARCH FOR CURRENT STATS:
+   If ReliefWeb doesn't have enough detail, make web searches for each conflict:
+   - Search query: "[Country] humanitarian crisis statistics 2025"
+   - Search query: "[Country] displaced refugees 2025 UN OCHA"
+   - Use ONLY results from: reliefweb.int, unhcr.org, unocha.org, icrc.org, data.unhcr.org
+   - Pass the search results to OpenAI to extract statistics
+   - Store with source attribution
+
+EXAMPLE WORKFLOW FOR NIGERIA:
+
+Step 1: Fetch ReliefWeb reports about Nigeria
+```javascript
+const reports = await fetchReliefWebReports('NGA'); // Nigeria ISO code
+```
+
+Step 2: Send report text to OpenAI API:
+```javascript
+const prompt = `Extract statistics from: "${reports[0].body}"
+
+Return valid JSON only with this structure:
+{
+  "peopleAffected": "8.3 million",
+  "internallyDisplaced": "2 million", 
+  "refugeesAbroad": null,
+  "crisisStartYear": "2009",
+  "primaryNeeds": ["Food Security", "Protection", "Shelter"],
+  "sources": ["ReliefWeb Report - Boko Haram Crisis Update"]
+}`;
+
+const completion = await openai.chat.completions.create({
+  model: "gpt-4-turbo-preview",
+  temperature: 0.1,
+  messages: [
+    { role: "system", content: "Extract factual statistics only. Return valid JSON." },
+    { role: "user", content: prompt }
+  ]
+});
+
+const stats = JSON.parse(completion.choices[0].message.content);
+```
+
+Step 3: Update Nigeria conflict in database
+```sql
+UPDATE conflicts 
+SET peopleAffected = '8.3 million',
+    internallyDisplaced = '2 million',
+    crisisStartYear = '2009',
+    primaryNeeds = '["Food Security", "Protection", "Shelter"]',
+    detailsLastUpdated = NOW()
+WHERE country = 'Nigeria';
+```
+
+Step 4: Details modal now shows real numbers instead of "Data unavailable"
+
+PRIORITY ORDER FOR DATA SOURCES:
+1. ReliefWeb API reports you already scraped
+2. OpenAI extraction from ReliefWeb report text
+3. Fresh ReliefWeb API call if stored data is missing
+4. UNHCR Statistics API (https://data.unhcr.org)
+5. Web search limited to verified humanitarian .org sites
+
+CRITICAL RULES:
+- Use OPENAI API (not Claude) - you already have the key configured
+- Only use statistics from verified sources (UN agencies, Red Cross, ICRC)
+- Never make up numbers - if OpenAI can't find it in source text, it should return null
+- Always cite the source of each statistic
+- Update detailsLastUpdated field so users know how fresh the data is
+- Handle errors gracefully - if API fails for one conflict, continue with others
+- Parse OpenAI JSON response carefully (strip markdown code blocks if present)
+
+ERROR HANDLING FOR OPENAI:
+```javascript
+try {
+  const response = await openai.chat.completions.create({...});
+  let content = response.choices[0].message.content;
+  
+  // Strip markdown code blocks if present
+  content = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+  
+  const stats = JSON.parse(content);
+  // Use stats to update database
+} catch (error) {
+  console.error(`Failed to extract stats for ${country}:`, error);
+  // Continue with next conflict
+}
+```
+
+IMPLEMENTATION STEPS:
+1. Create a script/function: populateConflictDetails()
+2. For each of the 31 conflicts:
+   - Fetch ReliefWeb data
+   - Extract stats using OpenAI API
+   - Update database
+3. Run it now to fill in the statistics
+4. Update the Details modal component to read from new database fields:
+   - peopleAffected → "Total in need"
+   - internallyDisplaced → "Internally displaced"
+   - refugeesAbroad → "Refugees abroad"
+   - crisisStartYear → "Crisis began"
+   - primaryNeeds array → "Primary Humanitarian Needs" pills
+5. Test Nigeria, Lebanon, Mozambique - should now show real data
+
+EXPECTED RESULTS:
+After running this, you should have:
+- ~20-25 conflicts with peopleAffected data
+- ~15-20 conflicts with displacement numbers
+- ~25-30 conflicts with crisisStartYear
+- ~28-30 conflicts with primaryNeeds
+- Some conflicts will still have "Data unavailable" for certain fields - that's honest and acceptable
+
+Run this data population process NOW using OpenAI API. After it completes, show me:
+- How many conflicts now have complete statistics
+- Example of Nigeria's populated data
+- Example of one conflict that still has some "Data unavailable" fields
+- Confirmation that Details modal displays the real data
+
+PRIORITY: Get data for the most critical/well-known conflicts first (Sudan, Yemen, Syria, Gaza, Ukraine, Nigeria, DRC, Myanmar, Haiti, Afghanistan, Somalia, Ethiopia) - these are most likely to come up in the demo.
+
+Time is critical - we have 6 hours to competition. Execute this NOW.

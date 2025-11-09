@@ -1,0 +1,460 @@
+// admin/VerificationDashboard.jsx
+import React, { useState, useEffect } from 'react';
+import { 
+  Card, 
+  Button, 
+  Badge, 
+  Progress, 
+  Tabs, 
+  Alert,
+  Modal 
+} from 'react-bootstrap';
+
+export default function VerificationDashboard() {
+  const [pendingOrgs, setPendingOrgs] = useState([]);
+  const [selectedOrg, setSelectedOrg] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetchPendingVerifications();
+  }, []);
+
+  const fetchPendingVerifications = async () => {
+    const response = await fetch('/api/admin/verifications/pending');
+    const data = await response.json();
+    setPendingOrgs(data.organizations);
+    setLoading(false);
+  };
+
+  return (
+    <div className="container mt-4">
+      <h1>Organization Verification Queue</h1>
+      <p className="text-muted">
+        {pendingOrgs.length} organization(s) awaiting verification
+      </p>
+
+      {/* Statistics */}
+      <div className="row mb-4">
+        <div className="col-md-3">
+          <Card>
+            <Card.Body>
+              <h6>Pending</h6>
+              <h3>{pendingOrgs.filter(o => o.status === 'pending').length}</h3>
+            </Card.Body>
+          </Card>
+        </div>
+        <div className="col-md-3">
+          <Card>
+            <Card.Body>
+              <h6>In Review</h6>
+              <h3>{pendingOrgs.filter(o => o.status === 'in_review').length}</h3>
+            </Card.Body>
+          </Card>
+        </div>
+        <div className="col-md-3">
+          <Card>
+            <Card.Body>
+              <h6>Verified Today</h6>
+              <h3>{pendingOrgs.filter(o => o.verified_today).length}</h3>
+            </Card.Body>
+          </Card>
+        </div>
+        <div className="col-md-3">
+          <Card>
+            <Card.Body>
+              <h6>Avg Review Time</h6>
+              <h3>2.3 days</h3>
+            </Card.Body>
+          </Card>
+        </div>
+      </div>
+
+      {/* Organization List */}
+      <div className="row">
+        <div className="col-md-4">
+          {pendingOrgs.map(org => (
+            <Card 
+              key={org.id} 
+              className="mb-3"
+              onClick={() => setSelectedOrg(org)}
+              style={{ cursor: 'pointer' }}
+            >
+              <Card.Body>
+                <div className="d-flex justify-content-between align-items-start">
+                  <div>
+                    <h5>{org.name}</h5>
+                    <small className="text-muted">EIN: {org.ein}</small>
+                  </div>
+                  <Badge bg={getStatusBadge(org.verification_status)}>
+                    {org.verification_status}
+                  </Badge>
+                </div>
+                
+                <div className="mt-2">
+                  <small>Submitted: {new Date(org.submitted_at).toLocaleDateString()}</small>
+                </div>
+                
+                {org.risk_level && (
+                  <Badge bg={getRiskBadge(org.risk_level)} className="mt-2">
+                    Risk: {org.risk_level}
+                  </Badge>
+                )}
+              </Card.Body>
+            </Card>
+          ))}
+        </div>
+
+        {/* Organization Detail */}
+        <div className="col-md-8">
+          {selectedOrg ? (
+            <OrganizationVerificationDetail
+              organization={selectedOrg}
+              onApprove={handleApprove}
+              onReject={handleReject}
+              onRequestMore={handleRequestMore}
+            />
+          ) : (
+            <Alert variant="info">
+              Select an organization from the list to review
+            </Alert>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function OrganizationVerificationDetail({ organization, onApprove, onReject, onRequestMore }) {
+  const [activeTab, setActiveTab] = useState('overview');
+  const [notes, setNotes] = useState('');
+
+  return (
+    <Card>
+      <Card.Header>
+        <h3>{organization.name}</h3>
+        <Badge bg={getStatusBadge(organization.verification_status)}>
+          {organization.verification_status}
+        </Badge>
+      </Card.Header>
+
+      <Card.Body>
+        <Tabs activeKey={activeTab} onSelect={setActiveTab}>
+          {/* Overview Tab */}
+          <Tab eventKey="overview" title="Overview">
+            <div className="mt-3">
+              <h5>Basic Information</h5>
+              <table className="table">
+                <tbody>
+                  <tr>
+                    <td><strong>EIN:</strong></td>
+                    <td>{organization.ein}</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Website:</strong></td>
+                    <td>
+                      <a href={organization.website} target="_blank" rel="noopener noreferrer">
+                        {organization.website}
+                      </a>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td><strong>Email:</strong></td>
+                    <td>{organization.email}</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Address:</strong></td>
+                    <td>
+                      {organization.address}<br />
+                      {organization.city}, {organization.state} {organization.zip}
+                    </td>
+                  </tr>
+                  <tr>
+                    <td><strong>Phone:</strong></td>
+                    <td>{organization.phone}</td>
+                  </tr>
+                </tbody>
+              </table>
+
+              <h5 className="mt-4">Mission Statement</h5>
+              <p>{organization.mission}</p>
+
+              <h5 className="mt-4">Verification Progress</h5>
+              <Progress 
+                now={organization.verification_progress} 
+                label={`${organization.verification_progress}%`} 
+              />
+            </div>
+          </Tab>
+
+          {/* Verification Steps Tab */}
+          <Tab eventKey="steps" title="Verification Steps">
+            <div className="mt-3">
+              {organization.verification_data?.steps.map((step, index) => (
+                <Card key={index} className="mb-3">
+                  <Card.Body>
+                    <div className="d-flex justify-content-between align-items-center">
+                      <h6>{step.name}</h6>
+                      {step.passed ? (
+                        <Badge bg="success">✓ Passed</Badge>
+                      ) : (
+                        <Badge bg="danger">✗ Failed</Badge>
+                      )}
+                    </div>
+
+                    {step.data && (
+                      <div className="mt-2">
+                        <pre className="bg-light p-2">
+                          {JSON.stringify(step.data, null, 2)}
+                        </pre>
+                      </div>
+                    )}
+
+                    {step.issues && step.issues.length > 0 && (
+                      <Alert variant="warning" className="mt-2">
+                        <strong>Issues:</strong>
+                        <ul>
+                          {step.issues.map((issue, i) => (
+                            <li key={i}>{issue}</li>
+                          ))}
+                        </ul>
+                      </Alert>
+                    )}
+                  </Card.Body>
+                </Card>
+              ))}
+            </div>
+          </Tab>
+
+          {/* Third-Party Ratings Tab */}
+          <Tab eventKey="ratings" title="Ratings">
+            <div className="mt-3">
+              {/* Charity Navigator */}
+              {organization.charity_navigator_rating && (
+                <Card className="mb-3">
+                  <Card.Body>
+                    <h5>Charity Navigator</h5>
+                    <div className="d-flex align-items-center">
+                      <div className="me-3">
+                        <h2>{organization.charity_navigator_rating}/4</h2>
+                        <div>
+                          {'⭐'.repeat(organization.charity_navigator_rating)}
+                        </div>
+                      </div>
+                      <div>
+                        <p><strong>Financial Rating:</strong> {organization.financial_rating}/4</p>
+                        <p><strong>Accountability:</strong> {organization.accountability_rating}/4</p>
+                      </div>
+                    </div>
+                  </Card.Body>
+                </Card>
+              )}
+
+              {/* GuideStar */}
+              {organization.guidestar_verified && (
+                <Card className="mb-3">
+                  <Card.Body>
+                    <h5>GuideStar</h5>
+                    <Badge bg="success">Verified</Badge>
+                    {organization.guidestar_seal && (
+                      <div className="mt-2">
+                        <strong>Seal:</strong> {organization.guidestar_seal}
+                      </div>
+                    )}
+                  </Card.Body>
+                </Card>
+              )}
+
+              {/* Financial Data */}
+              <Card className="mb-3">
+                <Card.Body>
+                  <h5>Financial Data</h5>
+                  <table className="table">
+                    <tbody>
+                      <tr>
+                        <td>Program Expenses:</td>
+                        <td>{organization.program_expense_percentage}%</td>
+                      </tr>
+                      <tr>
+                        <td>Overhead:</td>
+                        <td>{organization.overhead_percentage}%</td>
+                      </tr>
+                      <tr>
+                        <td>Total Revenue:</td>
+                        <td>${organization.total_revenue?.toLocaleString()}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </Card.Body>
+              </Card>
+            </div>
+          </Tab>
+
+          {/* Documents Tab */}
+          <Tab eventKey="documents" title="Documents">
+            <div className="mt-3">
+              {organization.verification_documents?.map((doc, index) => (
+                <Card key={index} className="mb-3">
+                  <Card.Body>
+                    <div className="d-flex justify-content-between">
+                      <div>
+                        <h6>{doc.document_type.replace(/_/g, ' ').toUpperCase()}</h6>
+                        <small className="text-muted">
+                          Uploaded: {new Date(doc.uploaded_at).toLocaleDateString()}
+                        </small>
+                      </div>
+                      <div>
+                        {doc.verified ? (
+                          <Badge bg="success">Verified</Badge>
+                        ) : (
+                          <Badge bg="warning">Pending</Badge>
+                        )}
+                      </div>
+                    </div>
+
+                    {doc.confidence && (
+                      <div className="mt-2">
+                        <small>Confidence: {(doc.confidence * 100).toFixed(0)}%</small>
+                      </div>
+                    )}
+
+                    <Button 
+                      variant="outline-primary" 
+                      size="sm" 
+                      className="mt-2"
+                      onClick={() => window.open(doc.file_url, '_blank')}
+                    >
+                      View Document
+                    </Button>
+                  </Card.Body>
+                </Card>
+              ))}
+            </div>
+          </Tab>
+
+          {/* Risk Assessment Tab */}
+          <Tab eventKey="risk" title="Risk Assessment">
+            <div className="mt-3">
+              {organization.risk_assessment && (
+                <>
+                  <Alert variant={getRiskAlertVariant(organization.risk_assessment.risk_level)}>
+                    <h5>Risk Level: {organization.risk_assessment.risk_level.toUpperCase()}</h5>
+                    <p>Score: {(organization.risk_assessment.risk_score * 100).toFixed(0)}/100</p>
+                  </Alert>
+
+                  {organization.risk_assessment.concerns?.length > 0 && (
+                    <Card className="mb-3">
+                      <Card.Body>
+                        <h6>⚠️ Concerns</h6>
+                        <ul>
+                          {organization.risk_assessment.concerns.map((concern, i) => (
+                            <li key={i}>{concern}</li>
+                          ))}
+                        </ul>
+                      </Card.Body>
+                    </Card>
+                  )}
+
+                  {organization.risk_assessment.strengths?.length > 0 && (
+                    <Card className="mb-3">
+                      <Card.Body>
+                        <h6>✓ Strengths</h6>
+                        <ul>
+                          {organization.risk_assessment.strengths.map((strength, i) => (
+                            <li key={i}>{strength}</li>
+                          ))}
+                        </ul>
+                      </Card.Body>
+                    </Card>
+                  )}
+
+                  <Card>
+                    <Card.Body>
+                      <h6>AI Recommendation</h6>
+                      <Badge bg={getRecommendationBadge(organization.risk_assessment.recommendation)}>
+                        {organization.risk_assessment.recommendation.toUpperCase()}
+                      </Badge>
+                      <p className="mt-2">{organization.risk_assessment.reasoning}</p>
+                    </Card.Body>
+                  </Card>
+                </>
+              )}
+            </div>
+          </Tab>
+        </Tabs>
+
+        {/* Admin Actions */}
+        <div className="mt-4">
+          <h5>Admin Notes</h5>
+          <textarea
+            className="form-control mb-3"
+            rows="4"
+            placeholder="Add notes about this organization..."
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+          />
+
+          <div className="d-flex gap-2">
+            <Button
+              variant="success"
+              onClick={() => onApprove(organization.id, notes)}
+            >
+              ✓ Approve & Verify
+            </Button>
+
+            <Button
+              variant="danger"
+              onClick={() => onReject(organization.id, notes)}
+            >
+              ✗ Reject
+            </Button>
+
+            <Button
+              variant="warning"
+              onClick={() => onRequestMore(organization.id, notes)}
+            >
+              Request More Information
+            </Button>
+          </div>
+        </div>
+      </Card.Body>
+    </Card>
+  );
+}
+
+function getStatusBadge(status) {
+  const badges = {
+    'pending': 'warning',
+    'in_review': 'info',
+    'verified': 'success',
+    'rejected': 'danger',
+    'needs_info': 'secondary'
+  };
+  return badges[status] || 'secondary';
+}
+
+function getRiskBadge(level) {
+  const badges = {
+    'low': 'success',
+    'medium': 'warning',
+    'high': 'danger'
+  };
+  return badges[level] || 'secondary';
+}
+
+function getRiskAlertVariant(level) {
+  const variants = {
+    'low': 'success',
+    'medium': 'warning',
+    'high': 'danger'
+  };
+  return variants[level] || 'info';
+}
+
+function getRecommendationBadge(recommendation) {
+  const badges = {
+    'approve': 'success',
+    'review': 'warning',
+    'reject': 'danger'
+  };
+  return badges[recommendation] || 'secondary';
+}

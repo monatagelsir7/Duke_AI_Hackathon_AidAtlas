@@ -1,0 +1,155 @@
+res.json({
+        success: true,
+        message: 'Report submitted successfully'
+      });
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to submit report' });
+    }
+  }
+);
+
+// Admin: Get pending verifications
+router.get('/api/admin/verifications/pending',
+  adminAuthMiddleware,
+  async (req, res) => {
+    try {
+      const pending = await db.query(`
+        SELECT 
+          o.*,
+          (SELECT COUNT(*) FROM verification_documents WHERE organization_id = o.id) as doc_count,
+          (SELECT json_agg(vd.* ORDER BY vd.uploaded_at DESC) 
+           FROM verification_documents vd 
+           WHERE vd.organization_id = o.id) as verification_documents
+        FROM organizations o
+        WHERE o.verification_status IN ('pending', 'in_review', 'needs_info')
+        ORDER BY o.created_at ASC
+      `);
+      
+      res.json({
+        organizations: pending.rows
+      });
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to fetch pending verifications' });
+    }
+  }
+);
+
+// Admin: Approve organization
+router.post('/api/admin/organizations/:id/approve',
+  adminAuthMiddleware,
+  async (req, res) => {
+    const { id } = req.params;
+    const { notes, verification_level } = req.body;
+    
+    try {
+      await db.query(`
+        UPDATE organizations
+        SET 
+          verification_status = 'verified',
+          verification_level = $2,
+          last_verified = NOW(),
+          verified_by = $3
+        WHERE id = $1
+      `, [id, verification_level || 2, req.user.id]);
+      
+      // Log action
+      await db.query(`
+        INSERT INTO verification_history (
+          organization_id, action, new_status, performed_by, notes
+        ) VALUES ($1, 'approved', 'verified', $2, $3)
+      `, [id, req.user.id, notes]);
+      
+      // Notify organization
+      await notifyOrganizationVerified(id);
+      
+      res.json({
+        success: true,
+        message: 'Organization approved'
+      });
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to approve organization' });
+    }
+  }
+);
+
+// Admin: Reject organization
+router.post('/api/admin/organizations/:id/reject',
+  adminAuthMiddleware,
+  async (req, res) => {
+    const { id } = req.params;
+    const { reason, notes } = req.body;
+    
+    try {
+      await db.query(`
+        UPDATE organizations
+        SET 
+          verification_status = 'rejected',
+          verification_data = jsonb_set(
+            COALESCE(verification_data, '{}'::jsonb),
+            '{rejection_reason}',
+            $2
+          )
+        WHERE id = $1
+      `, [id, JSON.stringify(reason)]);
+      
+      // Log action
+      await db.query(`
+        INSERT INTO verification_history (
+          organization_id, action, new_status, performed_by, notes
+        ) VALUES ($1, 'rejected', 'rejected', $2, $3)
+      `, [id, req.user.id, notes]);
+      
+      // Notify organization
+      await notifyOrganizationRejected(id, reason);
+      
+      res.json({
+        success: true,
+        message: 'Organization rejected'
+      });
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to reject organization' });
+    }
+  }
+);
+
+// Admin: Request more information
+router.post('/api/admin/organizations/:id/request-info',
+  adminAuthMiddleware,
+  async (req, res) => {
+    const { id } = req.params;
+    const { requested_items, notes } = req.body;
+    
+    try {
+      await db.query(`
+        UPDATE organizations
+        SET 
+          verification_status = 'needs_info',
+          verification_data = jsonb_set(
+            COALESCE(verification_data, '{}'::jsonb),
+            '{requested_items}',
+            $2
+          )
+        WHERE id = $1
+      `, [id, JSON.stringify(requested_items)]);
+      
+      // Log action
+      await db.query(`
+        INSERT INTO verification_history (
+          organization_id, action, new_status, performed_by, notes
+        ) VALUES ($1, 'info_requested', 'needs_info', $2, $3)
+      `, [id, req.user.id, notes]);
+      
+      // Notify organization
+      await notifyOrganizationNeedsInfo(id, requested_items);
+      
+      res.json({
+        success: true,
+        message: 'Information request sent'
+      });
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to request information' });
+    }
+  }
+);
+
+module.exports = router;

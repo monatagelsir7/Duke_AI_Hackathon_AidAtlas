@@ -1,0 +1,298 @@
+Implement Support feature with CharityWatch scraping - display 3 nonprofits in ONE card.
+
+MY EVERY.ORG API KEY: pk_live_eb590d0a94e5891accf5fb3019be1d60
+
+USER FLOW:
+1. User clicks "Support" button on a conflict card
+2. Navigate to /support/[Country]
+3. Page opens showing ONE card with 3 nonprofits listed inside
+
+WHEN SUPPORT PAGE LOADS FOR A COUNTRY:
+
+STEP 1: FIND NONPROFITS WORKING IN THIS COUNTRY
+
+Use web search: "[Country] humanitarian aid nonprofits US organizations"
+
+Look for results from trusted sources:
+- reliefweb.int
+- UN humanitarian response sites
+- Official humanitarian news (devex.com, thenewhumanitarian.org)
+- USAID.gov
+
+Extract well-known US nonprofit names mentioned as actively working in this country.
+
+Start by finding 10-15 nonprofit names to have enough options.
+
+STEP 2: CHECK CHARITYWATCH FOR EACH NONPROFIT
+
+For each nonprofit found:
+
+Use web search: "site:charitywatch.org [Nonprofit Name]"
+
+If result found, visit the CharityWatch page for that nonprofit
+Base URL is: https://www.charitywatch.org/charities/
+
+From the CharityWatch page, scrape:
+- Letter rating (A+, A, A-, B+, B, C, D, F)
+- Program expense percentage (look for "% to programs" or similar)
+
+IF CharityWatch has this nonprofit with both rating and program %:
+- KEEP IT: Store rating, programPercent, source="CharityWatch"
+
+IF CharityWatch does NOT have this nonprofit OR can't find their page:
+- SKIP IT: Don't use this nonprofit at all
+- Move to next nonprofit
+
+Continue until you have at least 3 nonprofits with CharityWatch ratings.
+
+If you've checked all 10-15 and have fewer than 3:
+- Search for more nonprofits (expand web search)
+- Keep searching until you find 3 with CharityWatch ratings
+
+STEP 3: RANK THE CHARITYWATCH-RATED NONPROFITS
+
+Sort only the nonprofits that have CharityWatch ratings:
+
+1. A+ rated (sort by program % highest first)
+2. A rated (sort by program % highest first)
+3. A- rated (sort by program % highest first)
+4. B+ rated (sort by program % highest first)
+5. B rated (sort by program % highest first)
+
+Skip any rated below B (C, D, F).
+
+Take TOP 3 from this sorted list.
+
+STEP 4: GET LOGOS AND DONATE URLS FOR TOP 3
+
+For each of top 3:
+- Logo: Search Every.org API by name, fallback to Clearbit (https://logo.clearbit.com/[domain])
+- Donate URL: Every.org profile OR their website donation page
+- Use OpenAI to generate 3 bullet points (10-15 words each) about their humanitarian work
+
+STEP 5: DISPLAY ONE CARD WITH ALL 3 NONPROFITS
+
+Show ONE card containing all 3 nonprofits:
+
+┌────────────────────────────────────────────────┐
+│  ← Back to Discover                            │
+│                                                │
+│  Supporting: [Country] Crisis                  │
+│  Choose a trusted organization to support      │
+└────────────────────────────────────────────────┘
+
+┌────────────────────────────────────────────────┐
+│                                                │
+│  [80x80 Logo]    [Nonprofit 1 Name]            │
+│  (circular)      ⭐⭐⭐⭐⭐ A+                 │
+│                  CharityWatch · 92% to programs│
+│                                                │
+│  • Provides emergency humanitarian assistance  │
+│  • Works in crisis-affected regions worldwide  │
+│  • Delivers medical care and emergency relief  │
+│                                                │
+│  Founded: 1971                                 │
+│          [💙 Donate Now →]                     │
+│                                                │
+│  ─────────────────────────────────────────────│
+│                                                │
+│  [80x80 Logo]    [Nonprofit 2 Name]            │
+│  (circular)      ⭐⭐⭐⭐☆ A                   │
+│                  CharityWatch · 88% to programs│
+│                                                │
+│  • [Bullet point 1]                            │
+│  • [Bullet point 2]                            │
+│  • [Bullet point 3]                            │
+│                                                │
+│  Founded: 1933                                 │
+│          [💙 Donate Now →]                     │
+│                                                │
+│  ─────────────────────────────────────────────│
+│                                                │
+│  [80x80 Logo]    [Nonprofit 3 Name]            │
+│  (circular)      ⭐⭐⭐⭐☆ A                   │
+│                  CharityWatch · 86% to programs│
+│                                                │
+│  • [Bullet point 1]                            │
+│  • [Bullet point 2]                            │
+│  • [Bullet point 3]                            │
+│                                                │
+│  Founded: 1932                                 │
+│          [💙 Donate Now →]                     │
+│                                                │
+└────────────────────────────────────────────────┘
+
+VISUAL DESIGN SPECIFICATIONS:
+
+PAGE HEADER:
+- Back button: "← Back to Discover" (clickable, returns to /discover)
+- Title: "Supporting: [Country] Crisis" (font-size: 28px, font-weight: 700, color: #1a1a1a)
+- Subtitle: "Choose a trusted organization to support" (font-size: 16px, color: #666)
+- Background: white
+- Padding: 32px 24px
+- Margin-bottom: 24px
+
+SINGLE CARD CONTAINER:
+- Width: 100% on mobile, max-width 700px centered on desktop
+- Background: white
+- Border-radius: 12px
+- Box-shadow: 0 2px 12px rgba(0,0,0,0.1)
+- Padding: 32px
+
+EACH NONPROFIT SECTION (3 sections in ONE card):
+- Padding: 24px 0
+- Border-bottom: 1px solid #e5e5e5 (divider between nonprofits)
+- Last nonprofit: No border-bottom
+
+LOGO (for each nonprofit):
+- Size: 80x80px
+- Border-radius: 50% (perfect circle)
+- Float left
+- Margin-right: 16px
+- Border: 1px solid #e5e5e5
+- Object-fit: cover
+- Fallback if broken: 🏢 emoji or fa-building icon, 40px, centered
+
+NONPROFIT NAME (for each):
+- Font-size: 22px
+- Font-weight: 600
+- Color: #1a1a1a
+- Margin-bottom: 4px
+- Line-height: 1.3
+
+STAR RATING (for each):
+- Position: Below name, same indentation
+- Stars: Use ⭐ (filled, #FFD700) and ☆ (empty, #d1d5db)
+- Font-size: 20px
+- Display inline with letter grade
+- Format: "⭐⭐⭐⭐⭐ A+"
+- Letter grade: font-size 18px, font-weight 600, color #1a1a1a
+
+RATING SOURCE (for each):
+- Font-size: 14px
+- Color: #666
+- Format: "CharityWatch · 92% to programs"
+- Margin-top: 4px
+
+BULLET POINTS (for each nonprofit):
+- Clear: both (below logo section)
+- Font-size: 15px
+- Color: #333
+- Line-height: 1.7
+- Margin-top: 12px
+- Use • bullet character
+- Spacing: 6px between bullets
+- Max 60 characters per bullet
+
+FOUNDED YEAR (for each, optional):
+- Font-size: 14px
+- Color: #666
+- Format: "Founded: 1971"
+- Margin-top: 8px
+- Only show if available
+
+DONATE BUTTON (for each nonprofit):
+- Width: 100%
+- Height: 48px
+- Background: #2563EB
+- Color: white
+- Border: none
+- Border-radius: 8px
+- Font-size: 16px
+- Font-weight: 600
+- Text: "💙 Donate Now →"
+- Margin-top: 16px
+- Cursor: pointer
+- Hover: background #1d4ed8, box-shadow 0 4px 12px rgba(37,99,235,0.3)
+- Active: transform scale(0.98)
+
+DIVIDER BETWEEN NONPROFITS:
+- Height: 1px
+- Background: #e5e5e5
+- Margin: 24px 0
+- Full width
+
+STAR CONVERSION:
+
+CharityWatch Rating → Stars:
+- A+ = ⭐⭐⭐⭐⭐ (5 filled)
+- A = ⭐⭐⭐⭐☆ (4 filled, 1 empty)
+- A- = ⭐⭐⭐⭐ (3.5 stars, use 4 filled)
+- B+ = ⭐⭐⭐☆☆ (3 filled, 2 empty)
+- B = ⭐⭐⭐ (2.5 stars, use 3 filled)
+- Below B = Don't show
+
+MOBILE RESPONSIVE (< 640px):
+- Logo: 60x60px
+- Name font-size: 20px
+- Stars: 18px
+- Card padding: 20px
+- Section padding: 20px 0
+
+ERROR HANDLING:
+
+If can't find 3 CharityWatch-rated nonprofits:
+- Show error page:
+  "We're currently expanding CharityWatch-verified nonprofits for [Country]."
+  "Please check back soon or explore other conflicts."
+  [← Return to Discover] button
+
+If CharityWatch is blocked:
+- Show error: "Unable to verify nonprofit ratings. Please try again."
+  [Retry] + [← Return to Discover]
+
+If logo fails: Show 🏢 fallback icon
+
+NEVER CRASH
+
+DONATION TRACKING:
+
+When user clicks any "Donate Now" button:
+
+1. Save to database:
+   INSERT INTO user_donations (userId, conflictId, conflictCountry, nonprofitName, nonprofitEin, timestamp, status)
+
+2. Open donate URL in new tab:
+   window.open(donateUrl, '_blank')
+
+3. Show toast (bottom-right, green, 3 seconds):
+   "Thank you for supporting [nonprofit name]!"
+
+CACHING:
+
+Cache per country for 6 hours:
+- Key: `charitywatch_support_${country}`
+- If cache valid: instant load
+- If expired: re-scrape
+
+CHARITYWATCH SCRAPING:
+
+1. Use web search: "site:charitywatch.org [Nonprofit Name]"
+2. Extract CharityWatch page URL from results
+3. Visit page and scrape rating + program %
+4. Headers: User-Agent, Accept
+5. Rate limit: 2 second delay between requests
+6. Handle 403/429/404 gracefully
+
+EXECUTION CHECKLIST:
+
+✅ Route /support/[country]
+✅ Find 10-15 nonprofits working in that country
+✅ Scrape CharityWatch for each
+✅ Keep only CharityWatch-rated nonprofits
+✅ Skip nonprofits without CharityWatch ratings
+✅ Find 3 with ratings
+✅ Rank by rating then program %
+✅ Get logos from Every.org or Clearbit
+✅ Get donate URLs
+✅ Display ONE card with 3 nonprofit sections
+✅ Dividers between sections
+✅ Each nonprofit has own Donate button
+✅ Star visualization for each
+✅ Donation tracking
+✅ Toast notifications
+✅ Error handling
+✅ Caching
+✅ Mobile responsive
+
+BUILD THIS NOW AND MAKE IT

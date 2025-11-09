@@ -1,0 +1,216 @@
+// routes/reports.js
+const express = require('express');
+const router = express.Router();
+const ReportGenerator = require('../services/report_generator');
+const BadgeService = require('../services/badge_service');
+const ShareCardGenerator = require('../services/share_card_generator');
+const authMiddleware = require('../middleware/auth');
+
+// Get current month's report
+router.get('/api/reports/monthly', authMiddleware, async (req, res) => {
+  try {
+    const reportGenerator = new ReportGenerator();
+    const report = await reportGenerator.generateMonthlyReport(req.user.id);
+    
+    res.json(report);
+  } catch (error) {
+    console.error('Error generating report:', error);
+    res.status(500).json({ error: 'Failed to generate report' });
+  }
+});
+
+// Get historical report
+router.get('/api/reports/monthly/:month', authMiddleware, async (req, res) => {
+  const { month } = req.params; // Format: YYYY-MM
+  
+  try {
+    const reportGenerator = new ReportGenerator();
+    const report = await reportGenerator.generateMonthlyReport(
+      req.user.id,
+      moment(month, 'YYYY-MM')
+    );
+    
+    res.json(report);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to generate report' });
+  }
+});
+
+// Get all user badges
+router.get('/api/badges', authMiddleware, async (req, res) => {
+  try {
+    const badges = await db.query(`
+      SELECT 
+        badge_type,
+        badge_name,
+        badge_icon,
+        badge_description,
+        earned_at
+      FROM user_badges
+      WHERE user_id = $1
+      ORDER BY earned_at DESC
+    `, [req.user.id]);
+    
+    res.json({ badges: badges.rows });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch badges' });
+  }
+});
+
+// Get user statistics
+router.get('/api/stats', authMiddleware, async (req, res) => {
+  try {
+    const stats = await db.query(`
+      SELECT 
+        COUNT(*) as total_donations,
+        SUM(amount) as total_donated,
+        AVG(amount) as avg_donation,
+        MIN(created_at) as first_donation,
+        MAX(created_at) as last_donation,
+        COUNT(DISTINCT DATE_TRUNC('month', created_at)) as months_donated,
+        COUNT(DISTINCT conflict_id) as conflicts_supported,
+        COUNT(DISTINCT organization_id) as organizations_supported
+      FROM donations
+      WHERE user_id = $1 AND status = 'succeeded'
+    `, [req.user.id]);
+    
+    const countries = await db.query(`
+      SELECT COUNT(DISTINCT c.country_code) as count
+      FROM donations d
+      JOIN conflicts c ON d.conflict_id = c.id
+      WHERE d.user_id = $1 AND d.status = 'succeeded'
+    `, [req.user.id]);
+    
+    const causes = await db.query(`
+      SELECT COUNT(DISTINCT unnest(c.tags)) as count
+      FROM donations d
+      JOIN conflicts c ON d.conflict_id = c.id
+      WHERE d.user_id = $1 AND d.status = 'succeeded'
+    `, [req.user.id]);
+    
+    res.json({
+      ...stats.rows[0],
+      countries_supported: countries.rows[0].count,
+      causes_supported: causes.rows[0].count
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch statistics' });
+  }
+});
+
+// Generate shareable card
+router.post('/api/reports/share', authMiddleware, async (req, res) => {
+  const { month } = req.body;
+  
+  try {
+    const cardGenerator = new ShareCardGenerator();
+    const imageUrl = await cardGenerator.generateImpactCard(
+      req.user.id,
+      month || moment().format('YYYY-MM')
+    );
+    
+    res.json({ 
+      success: true,
+      image_url: imageUrl 
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to generate share card' });
+  }
+});
+
+// Get user's impact points
+router.get('/api/points', authMiddleware, async (req, res) => {
+  try {
+    const points = await db.query(`
+      SELECT 
+        total_points,
+        points_this_month,
+        level,
+        next_level_points
+      FROM user_points
+      WHERE user_id = $1
+    `, [req.user.id]);
+    
+    const recentActivity = await db.query(`
+      SELECT 
+        activity_type,
+        points_earned,
+        description,
+        created_at
+      FROM points_history
+      WHERE user_id = $1
+      ORDER BY created_at DESC
+      LIMIT 20
+    `, [req.user.id]);
+    
+    res.json({
+      ...points.rows[0],
+      recent_activity: recentActivity.rows
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch points' });
+  }
+});
+
+// Redeem points
+router.post('/api/points/redeem', authMiddleware, async (req, res) => {
+  const { reward_id } = req.body;
+  
+  try {
+    const reward = await getReward(reward_id);
+    const userPoints = await getUserPoints(req.user.id);
+    
+    if (userPoints < reward.cost) {
+      return res.status(400).json({ 
+        error: 'Insufficient points' 
+      });
+    }
+    
+    // Deduct points
+    await db.query(`
+      UPDATE user_points
+      SET total_points = total_points - $2
+      WHERE user_id = $1
+    `, [req.user.id, reward.cost]);
+    
+    // Grant reward
+    await grantReward(req.user.id, reward);
+    
+    res.json({ 
+      success: true,
+      message: `Redeemed: ${reward.name}` 
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to redeem points' });
+  }
+});
+
+// Get monthly challenges
+router.get('/api/challenges', authMiddleware, async (req, res) => {
+  const month = req.query.month || moment().format('YYYY-MM');
+  
+  try {
+    const challenges = await db.query(`
+      SELECT 
+        c.id,
+        c.name,
+        c.description,
+        c.icon,
+        c.goal,
+        c.reward,
+        COALESCE(uc.progress, 0) as progress,
+        COALESCE(uc.completed, false) as completed,
+        uc.completed_at
+      FROM monthly_challenges c
+      LEFT JOIN user_challenges uc ON c.id = uc.challenge_id AND uc.user_id = $1
+      WHERE c.month = $2
+      ORDER BY c.display_order
+    `, [req.user.id, month]);
+    
+    res.json({ challenges: challenges.rows });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch challenges' });
+  }
+});
+
+module.exports = router;

@@ -1,0 +1,195 @@
+score += breakdown.ratings;
+
+    // 2. Financial Transparency (25 points)
+    breakdown.financial = this.scoreFinancialTransparency(org);
+    score += breakdown.financial;
+
+    // 3. Operational History (15 points)
+    breakdown.history = this.scoreOperationalHistory(org);
+    score += breakdown.history;
+
+    // 4. Verification Level (15 points)
+    breakdown.verification = this.scoreVerificationLevel(org);
+    score += breakdown.verification;
+
+    // 5. Impact Reporting (10 points)
+    breakdown.impact_reporting = this.scoreImpactReporting(org);
+    score += breakdown.impact_reporting;
+
+    // 6. User Feedback (5 points)
+    breakdown.user_feedback = await this.scoreUserFeedback(organizationId);
+    score += breakdown.user_feedback;
+
+    // Store trust score
+    await this.storeTrustScore(organizationId, {
+      total_score: Math.round(score),
+      breakdown: breakdown,
+      calculated_at: new Date()
+    });
+
+    return {
+      score: Math.round(score),
+      grade: this.getGrade(score),
+      breakdown: breakdown
+    };
+  }
+
+  scoreRatings(org) {
+    let score = 0;
+
+    // Charity Navigator (up to 15 points)
+    if (org.charity_navigator_rating) {
+      score += (org.charity_navigator_rating / 4) * 15;
+    }
+
+    // GuideStar Seal (up to 10 points)
+    if (org.guidestar_seal) {
+      const sealPoints = {
+        'bronze': 3,
+        'silver': 5,
+        'gold': 8,
+        'platinum': 10
+      };
+      score += sealPoints[org.guidestar_seal.toLowerCase()] || 0;
+    }
+
+    // BBB Accreditation (up to 5 points)
+    if (org.bbb_accredited) {
+      score += 5;
+    }
+
+    return score;
+  }
+
+  scoreFinancialTransparency(org) {
+    let score = 0;
+
+    // Program expense percentage (up to 15 points)
+    if (org.program_expense_percentage) {
+      if (org.program_expense_percentage >= 85) score += 15;
+      else if (org.program_expense_percentage >= 75) score += 12;
+      else if (org.program_expense_percentage >= 65) score += 8;
+      else score += 5;
+    }
+
+    // Overhead percentage (up to 10 points)
+    if (org.overhead_percentage) {
+      if (org.overhead_percentage <= 15) score += 10;
+      else if (org.overhead_percentage <= 25) score += 7;
+      else if (org.overhead_percentage <= 35) score += 4;
+      else score += 2;
+    }
+
+    return score;
+  }
+
+  scoreOperationalHistory(org) {
+    let score = 0;
+
+    // Years operating (up to 10 points)
+    const years = org.years_operating || 0;
+    if (years >= 10) score += 10;
+    else if (years >= 5) score += 7;
+    else if (years >= 2) score += 4;
+    else score += 2;
+
+    // Consistent Form 990 filing (up to 5 points)
+    if (org.consistent_990_filing) {
+      score += 5;
+    }
+
+    return score;
+  }
+
+  scoreVerificationLevel(org) {
+    const levelPoints = {
+      1: 5,
+      2: 10,
+      3: 15
+    };
+    return levelPoints[org.verification_level] || 0;
+  }
+
+  scoreImpactReporting(org) {
+    let score = 0;
+
+    // Regular impact updates (up to 5 points)
+    if (org.last_impact_update) {
+      const daysSince = (Date.now() - new Date(org.last_impact_update)) / (1000 * 60 * 60 * 24);
+      if (daysSince <= 30) score += 5;
+      else if (daysSince <= 90) score += 3;
+      else score += 1;
+    }
+
+    // Impact stories published (up to 5 points)
+    const storyCount = org.impact_stories_count || 0;
+    if (storyCount >= 10) score += 5;
+    else if (storyCount >= 5) score += 3;
+    else if (storyCount >= 1) score += 1;
+
+    return score;
+  }
+
+  async scoreUserFeedback(organizationId) {
+    const feedback = await db.query(`
+      SELECT 
+        COUNT(*) as total_donations,
+        AVG(CASE WHEN user_satisfied THEN 1.0 ELSE 0.0 END) as satisfaction_rate
+      FROM donation_feedback
+      WHERE organization_id = $1
+    `, [organizationId]);
+
+    if (!feedback.rows[0] || feedback.rows[0].total_donations < 10) {
+      return 3; // Neutral score for new organizations
+    }
+
+    const satisfactionRate = parseFloat(feedback.rows[0].satisfaction_rate);
+    return satisfactionRate * 5; // Up to 5 points
+  }
+
+  getGrade(score) {
+    if (score >= 90) return 'A+';
+    if (score >= 85) return 'A';
+    if (score >= 80) return 'A-';
+    if (score >= 75) return 'B+';
+    if (score >= 70) return 'B';
+    if (score >= 65) return 'B-';
+    if (score >= 60) return 'C+';
+    if (score >= 55) return 'C';
+    if (score >= 50) return 'C-';
+    return 'D';
+  }
+
+  async storeTrustScore(organizationId, scoreData) {
+    await db.query(`
+      INSERT INTO organization_trust_scores (
+        organization_id, total_score, breakdown, calculated_at
+      ) VALUES ($1, $2, $3, $4)
+    `, [
+      organizationId,
+      scoreData.total_score,
+      JSON.stringify(scoreData.breakdown),
+      scoreData.calculated_at
+    ]);
+
+    await db.query(`
+      UPDATE organizations
+      SET trust_score = $2, trust_score_updated = $3
+      WHERE id = $1
+    `, [organizationId, scoreData.total_score, scoreData.calculated_at]);
+  }
+
+  async getOrganizationData(organizationId) {
+    const result = await db.query(`
+      SELECT 
+        o.*,
+        (SELECT COUNT(*) FROM impact_stories WHERE organization_id = o.id) as impact_stories_count
+      FROM organizations o
+      WHERE o.id = $1
+    `, [organizationId]);
+
+    return result.rows[0];
+  }
+}
+
+module.exports = TrustScoreService;

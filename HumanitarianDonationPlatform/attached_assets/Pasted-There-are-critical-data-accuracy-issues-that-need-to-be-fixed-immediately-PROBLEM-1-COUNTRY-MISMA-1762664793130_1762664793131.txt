@@ -1,0 +1,64 @@
+There are critical data accuracy issues that need to be fixed immediately:
+
+PROBLEM 1: COUNTRY MISMATCH
+The Lebanon card shows "Lebanon Economic & Refugee Crisis" but the description says "hosting 1.5 million Syrian refugees" - this is confusing affected country with host country.
+
+FIX REQUIRED:
+- Lebanon IS experiencing a crisis (economic collapse + refugee burden), so the card is correct
+- But the summary is poorly written - it should focus on Lebanon's humanitarian situation, not Syria
+- Review ALL 31 conflicts and verify:
+  * Title matches the affected country
+  * Summary describes that country's crisis, not neighboring countries
+  * "Most Affected" groups are accurate for that specific country
+  * Region tag is correct (Lebanon should be "Middle East" ✓)
+
+Example fix for Lebanon card:
+- Current: "Economic collapse combined with hosting 1.5 million Syrian refugees has created widespread humanitarian needs..."
+- Better: "Severe economic collapse has left 80% of the population in poverty. Combined with hosting 1.5 million refugees, Lebanon faces critical shortages in healthcare, electricity, and basic services..."
+
+PROBLEM 2: ALL CARDS SHOW THE SAME IMAGE
+Every conflict is showing the same stock photo of children - this is wrong and misleading.
+
+ROOT CAUSE DIAGNOSIS:
+Check the database - are imageUrl fields all pointing to the same file? Or is the frontend not loading unique images correctly?
+
+FIX REQUIRED:
+1. For each of the 31 conflicts, check if ReliefWeb API provided real photos:
+   - If yes AND photo is non-graphic (no blood, violence, destruction): use that photo with proper credit
+   - If no OR photo is graphic: create unique colored severity cards (NO stock photos of people)
+
+2. Colored severity card design:
+   - Critical severity = deep red/burgundy solid color background
+   - High severity = orange solid color background  
+   - Moderate severity = yellow/amber solid color background
+   - Overlay the country name and region on the card
+   - NO photos of people unless they're verified real photos from the actual crisis
+
+3. NEVER use the same generic stock photo across multiple crises - this is exploitative and misleading
+
+4. Check database schema:
+```sql
+   SELECT country, imageUrl, severityLevel FROM conflicts;
+```
+   Show me the results - are all imageUrls identical?
+
+5. If ReliefWeb API responses included images, extract them properly:
+   - Parse the image URL from API response
+   - Validate it's non-graphic (check metadata/tags)
+   - Store unique imageUrl per conflict in database
+   - Add photo credit: "Photo: UN OCHA/[photographer]"
+
+6. Frontend image loading:
+   - Verify Discover.tsx is actually using conflict.imageUrl, not a hardcoded placeholder
+   - Add fallback: if imageUrl is null/broken, show severity-colored card
+
+IMMEDIATE ACTION REQUIRED:
+1. Audit all 31 conflicts in database - show me the data for Lebanon, Syria, Sudan, Yemen, Gaza to verify accuracy
+2. Fix country/description mismatches 
+3. Implement unique images per conflict (real photos OR severity cards - NO generic stock photos)
+4. Test that Pass/Details/Support buttons work correctly
+5. Show me 5 example cards after fixes to confirm each has unique, appropriate imagery
+
+This is critical for credibility - we cannot show the same photo for Lebanon, Sudan, and Haiti. Each crisis needs accurate information and appropriate imagery.
+
+Fix these issues NOW and show me the corrected Lebanon card data.

@@ -1,0 +1,256 @@
+// services/continuous_monitoring_service.js
+const cron = require('node-cron');
+
+class ContinuousMonitoringService {
+  /**
+   * Continuously monitor verified organizations for changes
+   */
+  
+  setupMonitoring() {
+    // Re-verify organizations quarterly
+    cron.schedule('0 0 1 */3 *', async () => {
+      await this.quarterlyReVerification();
+    });
+    
+    // Check for Form 990 updates monthly
+    cron.schedule('0 0 1 * *', async () => {
+      await this.check990Updates();
+    });
+    
+    // Monitor news for red flags daily
+    cron.schedule('0 9 * * *', async () => {
+      await this.monitorNews();
+    });
+  }
+  
+  async quarterlyReVerification() {
+    /**
+     * Re-verify organizations every 3 months
+     */
+    console.log('🔄 Starting quarterly re-verification...');
+    
+    const orgs = await db.query(`
+      SELECT id, name, ein
+      FROM organizations
+      WHERE verification_status = 'verified'
+      AND (last_verified IS NULL OR last_verified < NOW() - INTERVAL '3 months')
+      LIMIT 50
+    `);
+    
+    for (const org of orgs.rows) {
+      try {
+        await this.reVerifyOrganization(org.id);
+      } catch (error) {
+        console.error(`Error re-verifying ${org.name}:`, error);
+      }
+    }
+  }
+  
+  async reVerifyOrganization(organizationId) {
+    const org = await this.getOrganization(organizationId);
+    
+    // Check third-party ratings
+    const charityNav = await this.charityNavService.searchOrganization(org.ein);
+    const guideStar = await this.guideStarService.verifyNonprofit(org.ein);
+    
+    // Update ratings
+    await db.query(`
+      UPDATE organizations
+      SET 
+        charity_navigator_rating = $2,
+        guidestar_verified = $3,
+        last_verified = NOW()
+      WHERE id = $1
+    `, [
+      organizationId,
+      charityNav?.overall_rating,
+      guideStar?.verified
+    ]);
+    
+    // Recalculate trust score
+    const trustService = new TrustScoreService();
+    await trustService.calculateTrustScore(organizationId);
+    
+    // Flag significant changes
+    if (charityNav && charityNav.overall_rating < 2) {
+      await this.flagForReview(organizationId, 'Low Charity Navigator rating');
+    }
+  }
+  
+  async check990Updates() {
+    /**
+     * Check ProPublica for new Form 990 filings
+     */
+    console.log('📄 Checking for Form 990 updates...');
+    
+    const orgs = await db.query(`
+      SELECT id, ein, name
+      FROM organizations
+      WHERE verification_status = 'verified'
+    `);
+    
+    for (const org of orgs.rows) {
+      try {
+        const form990Data = await this.fetch990Data(org.ein);
+        
+        if (form990Data && form990Data.tax_year > org.last_990_year) {
+          await this.process990Update(org.id, form990Data);
+        }
+      } catch (error) {
+        console.error(`Error checking 990 for ${org.name}:`, error);
+      }
+    }
+  }
+  
+  async fetch990Data(ein) {
+    /**
+     * Fetch latest Form 990 from ProPublica Nonprofit Explorer
+     */
+    try {
+      const response = await axios.get(
+        `https://projects.propublica.org/nonprofits/api/v2/organizations/${ein}.json`
+      );
+      
+      if (response.data.filings_with_data.length > 0) {
+        const latest = response.data.filings_with_data[0];
+        
+        return {
+          tax_year: latest.tax_prd_yr,
+          total_revenue: latest.totrevenue,
+          total_expenses: latest.totfuncexpns,
+          program_expenses: latest.totprgmrevnue,
+          total_assets: latest.totassetsend,
+          form_url: latest.pdf_url
+        };
+      }
+    } catch (error) {
+      return null;
+    }
+  }
+  
+  async process990Update(organizationId, form990Data) {
+    // Update financial data
+    await db.query(`
+      UPDATE organizations
+      SET 
+        total_revenue = $2,
+        total_expenses = $3,
+        program_expenses = $4,
+        program_expense_percentage = CASE 
+          WHEN $3 > 0 THEN ($4 / $3) * 100 
+          ELSE NULL 
+        END,
+        last_990_year = $5
+      WHERE id = $1
+    `, [
+      organizationId,
+      form990Data.total_revenue,
+      form990Data.total_expenses,
+      form990Data.program_expenses,
+      form990Data.tax_year
+    ]);
+    
+    // Recalculate trust score
+    const trustService = new TrustScoreService();
+    await trustService.calculateTrustScore(organizationId);
+  }
+  
+  async monitorNews() {
+    /**
+     * Monitor news for mentions of verified organizations
+     * Flag potential issues (fraud, scandal, closure)
+     */
+    console.log('📰 Monitoring news for organization mentions...');
+    
+    const orgs = await db.query(`
+      SELECT id, name
+      FROM organizations
+      WHERE verification_status = 'verified'
+      AND is_active = true
+    `);
+    
+    for (const org of orgs.rows) {
+      const alerts = await this.checkNewsAlerts(org.name);
+      
+      if (alerts.length > 0) {
+        await this.processNewsAlerts(org.id, alerts);
+      }
+    }
+  }
+  
+  async checkNewsAlerts(organizationName) {
+    /**
+     * Search news for red flag keywords
+     */
+    const redFlagKeywords = [
+      'fraud', 'scandal', 'investigation', 'lawsuit', 'closure',
+      'mismanagement', 'embezzlement', 'controversy'
+    ];
+    
+    try {
+      const response = await axios.get('https://newsapi.org/v2/everything', {
+        params: {
+          q: `"${organizationName}" AND (${redFlagKeywords.join(' OR ')})`,
+          sortBy: 'publishedAt',
+          language: 'en',
+          apiKey: process.env.NEWS_API_KEY
+        }
+      });
+      
+      return response.data.articles || [];
+    } catch (error) {
+      return [];
+    }
+  }
+  
+  async processNewsAlerts(organizationId, alerts) {
+    // Store alerts
+    await db.query(`
+      INSERT INTO organization_alerts (
+        organization_id, alert_type, alert_data, created_at
+      ) VALUES ($1, 'news_mention', $2, NOW())
+    `, [organizationId, JSON.stringify(alerts)]);
+    
+    // Flag for admin review if critical
+    const criticalKeywords = ['fraud', 'embezzlement', 'closure'];
+    const hasCritical = alerts.some(a => 
+      criticalKeywords.some(k => a.title.toLowerCase().includes(k))
+    );
+    
+    if (hasCritical) {
+      await this.flagForReview(
+        organizationId, 
+        'Critical news alert detected'
+      );
+    }
+  }
+  
+  async flagForReview(organizationId, reason) {
+    await db.query(`
+      UPDATE organizations
+      SET verification_status = 'needs_review'
+      WHERE id = $1
+    `, [organizationId]);
+    
+    await db.query(`
+      INSERT INTO verification_history (
+        organization_id, action, new_status, notes
+      ) VALUES ($1, 'flagged', 'needs_review', $2)
+    `, [organizationId, reason]);
+    
+    // Notify admin team
+    await this.notifyAdmins(organizationId, reason);
+  }
+  
+  async notifyAdmins(organizationId, reason) {
+    // Send Slack/email notification to admin team
+    console.log(`🚨 ALERT: Organization ${organizationId} flagged for review: ${reason}`);
+  }
+  
+  async getOrganization(id) {
+    const result = await db.query('SELECT * FROM organizations WHERE id = $1', [id]);
+    return result.rows[0];
+  }
+}
+
+module.exports = ContinuousMonitoringService;

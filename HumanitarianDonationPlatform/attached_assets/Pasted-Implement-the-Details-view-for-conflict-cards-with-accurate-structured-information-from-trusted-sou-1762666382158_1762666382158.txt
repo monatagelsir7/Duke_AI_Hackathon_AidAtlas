@@ -1,0 +1,234 @@
+Implement the Details view for conflict cards with accurate, structured information from trusted sources.
+
+WHEN THIS APPEARS:
+- Details view opens as a modal/popup ONLY when user clicks the "Details" button on a conflict card
+- Each conflict has its own unique details - data is specific to that conflict
+- User can close/go back to return to the card view
+
+MODAL DESIGN OPTIONS (choose the best one):
+
+Option 1 (RECOMMENDED): Overlay Modal
+- Semi-transparent dark background (rgba(0,0,0,0.5) or similar) overlays the Discover page
+- White/light modal box appears centered on screen
+- Modal has rounded corners, drop shadow, and generous padding
+- Reference design: Instagram photo details, Twitter expanded tweets, or any modern popup
+- Background is dimmed but modal content is bright and readable
+- Click outside modal or press X to close
+
+Option 2 (ALTERNATIVE): Slide-up Panel
+- Details slide up from bottom of screen (like Tinder profile view or Apple Maps details)
+- Covers 80-90% of screen but shows a bit of the card at top
+- Swipe down or tap X to close
+- Good for mobile-first design
+
+Option 3 (FALLBACK): Full Page Navigation
+- Navigate to new page route (/conflict/:id/details or similar)
+- Full page view of details with navbar
+- Back button in navbar returns to Discover
+- Use this if modal options don't look good
+
+Implement Option 1 (overlay modal). If it looks cluttered or ugly during testing, switch to Option 2. Make sure the design is clean, professional, and readable - NOT cramped or confusing.
+
+DETAILS PAGE STRUCTURE:
+
+Create a clean, scannable layout with these sections (in this exact order):
+
+1. HEADER (Top of modal)
+   - Close button (X icon) in top-right corner
+   - Country name (large, bold)
+   - Region tag (small, subtle)
+   - Severity badge (Critical/High/Moderate with matching color from card - red/orange/yellow)
+
+2. CRISIS OVERVIEW (2-3 sentences maximum)
+   - Use the "summary" field from the conflicts table in database
+   - If summary is longer than 3 sentences, show only the first 2-3 sentences
+   - Font: readable size, not too small
+   - This gives context about what's happening
+
+3. KEY STATISTICS SECTION (Grid or card layout with icons)
+   
+   Create visual cards/sections with icons for each stat:
+   
+   📊 PEOPLE AFFECTED
+   - Total people in need: [number] OR "Data unavailable"
+   - Internally displaced: [number] OR "Data unavailable"
+   - Refugees abroad: [number] OR "Data unavailable"
+   
+   📅 TIMELINE  
+   - Crisis began: [YYYY] OR "Ongoing since [year]" OR "Data unavailable"
+   - Current status: "Active conflict" / "Escalating crisis" / "Ongoing emergency" OR "Data unavailable"
+   
+   🏥 PRIMARY HUMANITARIAN NEEDS (show top 3-4 if available)
+   - Display as icon pills or tags: Food Security, Medical Care, Shelter, Clean Water, Education, Protection
+   - If data exists, show it
+   - If not available, show "Data unavailable"
+   
+   👥 MOST VULNERABLE GROUPS
+   - Use the "affectedGroups" field from database (this should exist)
+   - Display as colored pills/tags (same visual style as card view)
+   - Examples: Children, Internally Displaced, Women, Elderly, Refugees
+
+4. RECENT DEVELOPMENTS (OPTIONAL - only show if data exists)
+   - Check if you have recent update information from sources
+   - If yes: show 1-2 short bullet points with dates
+   - If no: SKIP THIS ENTIRE SECTION (don't show empty section or "Data unavailable")
+   - This section is nice-to-have, not required
+
+5. SOURCE ATTRIBUTION (Always show at bottom)
+   - Small gray text at bottom of modal
+   - "Source: UN OCHA ReliefWeb" (or whichever verified source)
+   - "Last updated: [date]" - use the "lastUpdated" field from database, format as readable date like "November 8, 2025"
+   - Keeps credibility and transparency
+
+6. ACTION BUTTONS (Bottom of modal, sticky/fixed position)
+   - Two buttons side by side:
+   - Left button (secondary style): "← Back" - closes modal, returns to Discover cards
+   - Right button (primary blue style): "💙 Support" - goes to donation/support flow for this conflict
+   - Buttons should be easy to tap on mobile
+
+VISUAL SPACING & READABILITY:
+- Add proper padding between sections (not cramped)
+- Use divider lines or extra spacing between major sections
+- Make sure text isn't too small (especially on mobile)
+- Icons should be visible but not overwhelming
+- Mobile responsive: test that everything fits and is readable on phone screens
+- Should fit on approximately one screen height (minimal scrolling needed)
+- Clean, modern design - think Airbnb or modern app aesthetics
+
+DATA SOURCING STRATEGY - STEP BY STEP:
+
+Step 1: CHECK WHAT DATA EXISTS IN DATABASE
+First, query the conflicts table for this specific conflict:
+- Pull: country, region, title, summary, severityLevel, affectedGroups, lastUpdated
+- These fields SHOULD exist for all 31 conflicts
+
+Step 2: CHECK FOR ADDITIONAL DATA
+Look for additional statistics in this priority order:
+a) Check if conflicts table has additional columns like: peopleAffected, displaced, refugees, crisisStartDate, primaryNeeds
+b) Check scraped_content table if it exists - see if ReliefWeb data was stored there
+c) Check if you stored the raw ReliefWeb API response anywhere
+
+Step 3: EXTRACT AVAILABLE DATA
+From whatever data you find:
+- People affected numbers (look for: total affected, displaced, refugees)
+- Timeline info (look for: crisis start date, report dates)
+- Humanitarian needs (look for: themes, needs categories from ReliefWeb)
+- Status (infer from: severity + recent reports)
+
+Step 4: HANDLE MISSING DATA GRACEFULLY
+For ANY field where data doesn't exist:
+- Display "Data unavailable" in a subtle gray color
+- NEVER show: undefined, null, [object Object], NaN, or errors
+- NEVER make up or estimate numbers - only show real source data
+- Don't hide the field - show the label + "Data unavailable"
+
+Example of proper handling:
+✅ "Total people in need: Data unavailable"
+✅ "Crisis began: Data unavailable"
+✅ "Primary needs: Food Security, Shelter" (if you only found 2 of 3)
+
+❌ WRONG:
+"Total people in need: undefined"
+"Crisis began: null"  
+[Blank space where field should be]
+
+CRITICAL RULES - NO HALLUCINATIONS:
+
+1. ONLY display facts that exist in your database or source data
+2. NEVER invent statistics, numbers, dates, or details
+3. If you don't know something, say "Data unavailable" - this is better than lying
+4. Don't estimate or approximate - show exact data or show unavailable
+5. Don't make assumptions (e.g., don't assume crisis started in 2020 just because oldest report is from 2020)
+
+Examples:
+✅ "Crisis began: 2017" (if source explicitly states this)
+✅ "Crisis began: Data unavailable" (if you don't have this info)
+❌ "Crisis began: Approximately 2015-2017" (don't approximate)
+❌ "Crisis began: Long-standing conflict" (too vague, not from source)
+
+IMPLEMENTATION STEPS:
+
+1. Create a Details modal component (DetailsModal.tsx or similar)
+
+2. Add state management to Discover page:
+   - Track which conflict is selected
+   - Track if modal is open/closed
+   
+3. When user clicks "Details" button on a conflict card:
+   - Set selected conflict in state
+   - Pass the conflict object to modal
+   - Open modal with smooth fade-in animation
+
+4. In the modal component:
+   - Query database for full conflict data
+   - Check for additional statistics if available
+   - Render all sections with available data
+   - Show "Data unavailable" for missing fields
+
+5. Add close functionality:
+   - X button in top-right corner
+   - "Back" button at bottom
+   - (Optional) Click outside modal to close
+   - Escape key to close
+   - Smooth fade-out animation when closing
+
+6. Make it mobile responsive:
+   - Test on phone screen sizes
+   - Ensure buttons are easy to tap
+   - Text is readable (not too small)
+   - Modal fits on screen (scrollable if needed but try to minimize scrolling)
+
+ERROR HANDLING:
+
+- If database query fails: show message "Unable to load details. Please try again." with retry button
+- If conflict data is corrupted/malformed: show basic info (title, region) + "Some details are temporarily unavailable"
+- If modal won't open: log error to console, show toast notification "Could not load details"
+- Never crash the app - always degrade gracefully with error messages
+- If individual fields have bad data: show "Data unavailable" for those fields only
+
+TESTING CHECKLIST:
+
+After implementation, test these scenarios:
+
+✅ Click Details on Mozambique card → modal opens with Mozambique-specific data
+✅ Click X or Back → modal closes smoothly, returns to card view  
+✅ Click Details on Lebanon card → shows Lebanon data (different from Mozambique)
+✅ Click Details on Sudan/Yemen (high-data conflicts) → all/most sections populate
+✅ Click Details on a conflict with limited data → shows "Data unavailable" gracefully
+✅ Test on mobile screen size → readable, buttons work, not cut off
+✅ Click outside modal → closes (if you implemented this)
+✅ Press Escape key → closes (if you implemented this)
+✅ Verify NO undefined, null, NaN, or [object Object] visible to user
+✅ Source attribution always visible at bottom
+✅ Support button leads to support/donation flow
+
+ACCESSIBILITY:
+- Modal should trap focus (tab only cycles through modal elements when open)
+- Escape key closes modal
+- Close button has aria-label="Close"
+- Modal has proper ARIA attributes (role="dialog", aria-modal="true")
+
+WHAT SUCCESS LOOKS LIKE:
+
+Good Details Modal:
+- Opens smoothly when clicking Details
+- Shows clean, organized information
+- Has some "Data unavailable" fields (shows honesty about data limitations)
+- Looks professional and modern
+- Easy to read and navigate
+- Source is clearly cited
+- Closes smoothly
+- Works on mobile
+
+Bad Details Modal:
+- Shows undefined or null to users
+- Crashes when opening
+- Shows made-up statistics
+- Looks cluttered or ugly
+- Hard to read on mobile
+- No source attribution
+- Can't close it easily
+
+Implement this complete Details modal system NOW. Test it with at least 3 different conflicts (Mozambique, Lebanon, and one more) to verify each shows unique, accurate data.
+
+After implementation, the Details feature should work perfectly for the competition demo in a few hours.

@@ -1,0 +1,721 @@
+# Product Requirements Document: Humanitarian Donation Platform
+
+## 1. Executive Summary
+
+### 1.1 Product Vision
+A mobile-first platform that makes humanitarian giving accessible, engaging, and impactful by combining conflict tracking, personalized recommendations, and gamification elements to help users discover and support organizations working in conflict zones.
+
+### 1.2 Core Value Proposition
+- Reduces donation decision fatigue through personalized recommendations
+- Increases engagement through gamification and visual feedback
+- Builds trust through curated, verified organizations
+- Provides transparency on donation impact
+
+### 1.3 Target Users
+- Socially conscious millennials and Gen Z (ages 22-40)
+- People who want to help but feel overwhelmed by options
+- Existing donors looking for a more engaging donation experience
+- Users interested in global conflicts and humanitarian issues
+
+---
+
+## 2. Feature Breakdown & Technical Architecture
+
+### 2.1 USER ONBOARDING & AUTHENTICATION
+
+#### 2.1.1 Features
+- Email/password registration
+- OAuth (Google, Apple Sign-In)
+- User profile creation with basic information (name, location, interests)
+- Initial preference quiz (5-7 questions)
+
+#### 2.1.2 Technical Requirements
+
+**Frontend**
+- **Framework**: React Native (iOS/Android) or Flutter
+- **UI Library**: React Native Paper or Native Base
+- **Form Management**: React Hook Form or Formik
+- **Validation**: Yup or Zod
+
+**Backend**
+- **Authentication Service**: Firebase Auth, Auth0, or Supabase Auth
+- **API Framework**: Node.js with Express or Python with FastAPI
+- **Database**: PostgreSQL for user data
+
+**Tools & Services**
+- OAuth providers: Google Cloud Console, Apple Developer
+- Email verification service: SendGrid or AWS SES
+
+#### 2.1.3 Data Models
+```
+User {
+  id: UUID
+  email: string
+  name: string
+  location: {lat, lng, country}
+  created_at: timestamp
+  preferences: JSON
+}
+
+UserPreferences {
+  user_id: UUID (FK)
+  causes: array<string>
+  regions: array<string>
+  preferred_donation_range: string
+  updated_at: timestamp
+}
+```
+
+---
+
+### 2.2 PERSONALIZATION ENGINE & RECOMMENDATION ALGORITHM
+
+#### 2.2.1 Features
+- Initial quiz-based preference gathering
+- Behavioral tracking (swipes, time spent, donations)
+- Dynamic recommendation scoring
+- Content filtering based on user interests
+
+#### 2.2.2 Technical Requirements
+
+**Machine Learning Stack**
+- **Framework**: Python with scikit-learn or TensorFlow
+- **Algorithm**: Collaborative filtering + content-based hybrid approach
+- **Features to Track**:
+  - Swipe direction (up/down/pass)
+  - Time spent on each profile
+  - Organizations donated to
+  - Causes selected
+  - Geographic preferences
+
+**Backend Services**
+- **Recommendation API**: Python FastAPI
+- **Real-time Processing**: Apache Kafka or AWS Kinesis for event streaming
+- **Feature Store**: Redis for fast access to user features
+- **Model Training**: Scheduled jobs using Airflow or AWS Step Functions
+
+**Analytics & Tracking**
+- **Event Tracking**: Segment, Mixpanel, or Amplitude
+- **A/B Testing**: LaunchDarkly or Firebase Remote Config
+
+#### 2.2.3 Algorithm Components
+1. **Cold Start Solution**: Quiz-based initial preferences
+2. **Content-Based Filtering**: Match user preferences with conflict/organization attributes
+3. **Collaborative Filtering**: "Users like you also donated to..."
+4. **Contextual Bandits**: Balance exploration vs exploitation
+5. **Recency Weighting**: Prioritize current/urgent conflicts
+
+#### 2.2.4 Data Models
+```
+UserBehavior {
+  user_id: UUID
+  event_type: enum (swipe_up, swipe_down, swipe_pass, donate, view_details)
+  conflict_id: UUID
+  organization_id: UUID
+  timestamp: timestamp
+  session_id: UUID
+}
+
+RecommendationScore {
+  user_id: UUID
+  conflict_id: UUID
+  score: float
+  reasons: array<string>
+  generated_at: timestamp
+}
+```
+
+---
+
+### 2.3 CONFLICT & COUNTRY PROFILES (CARD INTERFACE)
+
+#### 2.3.1 Features
+- Swipeable card interface (Tinder/Hinge-style)
+- Country overview with key statistics
+- Impact breakdown by vulnerable groups
+- Verified organizations list
+- Daily updates
+- Rich media (images, videos)
+
+#### 2.3.2 Technical Requirements
+
+**Frontend**
+- **Swipe Library**: react-native-deck-swiper or react-tinder-card
+- **Media Handling**: React Native Fast Image
+- **Animations**: React Native Reanimated
+- **State Management**: Redux Toolkit or Zustand
+
+**Backend - Content Management**
+- **CMS**: Strapi, Directus, or custom-built
+- **Image CDN**: Cloudflare Images or Imgix
+- **Video Hosting**: Vimeo or AWS S3 + CloudFront
+
+**Data Pipeline**
+- **Web Scraping**: Python with Scrapy or BeautifulSoup
+- **News Sources**: NewsAPI, GDELT Project, Bing News API
+- **Scheduling**: Apache Airflow or Celery Beat
+- **Content Storage**: PostgreSQL + Elasticsearch for search
+
+#### 2.3.3 Data Models
+```
+Conflict {
+  id: UUID
+  country: string
+  region: string
+  title: string
+  summary: text
+  severity_level: enum
+  affected_groups: JSON
+  start_date: date
+  last_updated: timestamp
+  media_urls: array<string>
+  source_credibility_score: float
+}
+
+Organization {
+  id: UUID
+  name: string
+  description: text
+  website: url
+  verification_status: enum
+  charity_navigator_rating: float
+  causes: array<string>
+  countries_active: array<string>
+  donation_url: url
+}
+
+ConflictOrganization {
+  conflict_id: UUID
+  organization_id: UUID
+  target_groups: array<string>
+  intervention_type: string
+  urgency_score: float
+}
+```
+
+---
+
+### 2.4 AI-POWERED CONTENT GENERATION & SUMMARIZATION
+
+#### 2.4.1 Features
+- Daily web scraping of news sources
+- AI-generated summaries (objective, concise)
+- Fact-checking and source verification
+- Content moderation
+- Multi-language support
+
+#### 2.4.2 Technical Requirements
+
+**Web Scraping Infrastructure**
+- **Framework**: Python Scrapy or Puppeteer for JS-heavy sites
+- **Proxy Management**: Bright Data, ScraperAPI, or Crawlera
+- **News Sources**:
+  - UN OCHA ReliefWeb
+  - ICRC (International Committee of the Red Cross)
+  - WHO Emergencies
+  - Reuters, AP News, BBC News APIs
+  - GDELT Project (global event database)
+  - ACLED (Armed Conflict Location & Event Data)
+
+**AI/LLM Integration**
+- **Summarization**: 
+  - Claude API (Anthropic) - for nuanced, ethical content
+  - GPT-4 (OpenAI) as backup
+  - Llama 3 (self-hosted) for cost optimization
+- **Fact-Checking**: Integration with fact-checking APIs
+- **Prompt Engineering**: Version-controlled prompts with LangChain
+- **Content Moderation**: OpenAI Moderation API + custom filters
+
+**Storage & Processing**
+- **Data Lake**: AWS S3 or Google Cloud Storage
+- **Processing**: AWS Lambda/Google Cloud Functions
+- **Queue System**: AWS SQS or RabbitMQ
+- **Vector Database**: Pinecone or Weaviate for semantic search
+
+#### 2.4.3 Content Pipeline
+1. **Scraping Layer**: Collect articles from multiple sources
+2. **Deduplication**: Identify similar articles using embeddings
+3. **Summarization**: Generate concise, balanced summaries
+4. **Verification**: Cross-reference with multiple sources
+5. **Classification**: Categorize by conflict, region, affected groups
+6. **Publication**: Push to database and trigger notifications
+
+#### 2.4.4 AI Prompt Structure
+```
+System Prompt:
+"You are a humanitarian content summarizer. Create objective, 
+factual summaries of conflict situations. Focus on:
+- Verifiable facts only
+- Impact on civilian populations
+- Humanitarian needs
+- Avoid political bias
+- Cite sources
+- Be sensitive to trauma"
+
+Output Format:
+{
+  "summary": "150-word summary",
+  "affected_groups": ["women", "children", "elderly"],
+  "urgency_level": "high/medium/low",
+  "key_needs": ["food", "shelter", "medical"],
+  "confidence_score": 0.85
+}
+```
+
+---
+
+### 2.5 ADDITIONAL ACTIONS (PROTESTS, PETITIONS, ADVOCACY)
+
+#### 2.5.1 Features
+- Local protest finder based on user location
+- Active petitions related to conflicts
+- Congressional advocacy campaigns
+- Email/call-to-action templates
+
+#### 2.5.2 Technical Requirements
+
+**Data Sources**
+- **Protest Data**: 
+  - Scrape Eventbrite, Meetup, Facebook Events
+  - Partner with activist organizations
+  - Crowdsourced submissions
+- **Petitions**: Change.org API, Action Network
+- **Advocacy**: Integrate with Resistbot, Phone2Action
+
+**Geolocation Services**
+- **Maps**: Google Maps API or Mapbox
+- **Geocoding**: Convert user location to coordinates
+- **Radius Search**: PostGIS (PostgreSQL extension)
+
+**Backend**
+- **API Gateway**: Aggregate multiple data sources
+- **Caching**: Redis for frequently accessed locations
+- **Real-time Updates**: WebSockets for live event updates
+
+#### 2.5.3 Data Models
+```
+Action {
+  id: UUID
+  type: enum (protest, petition, advocacy)
+  title: string
+  description: text
+  related_conflict_id: UUID
+  location: {lat, lng} (nullable)
+  start_date: timestamp
+  end_date: timestamp
+  external_url: url
+  participants_count: integer
+}
+```
+
+---
+
+### 2.6 DONATION PROCESSING & RECURRING DONATIONS
+
+#### 2.6.1 Features
+- One-time donations
+- Recurring monthly donations
+- Split donations to multiple organizations
+- Algorithm-driven automated giving
+- Donation history & receipts
+
+#### 2.6.2 Technical Requirements
+
+**Payment Processing**
+- **Payment Gateway**: Stripe Connect (recommended for nonprofits)
+- **Alternative**: PayPal Giving Fund
+- **Compliance**: PCI DSS compliance (handled by Stripe)
+- **Tax Receipts**: Automated 501(c)(3) receipt generation
+
+**Donation Routing**
+- **Architecture**: Platform acts as intermediary (Stripe Connect)
+- **Fund Distribution**: Automated payouts to verified organizations
+- **Currency Conversion**: Stripe handles international transfers
+- **Fee Structure**: Define platform fee (0-5%)
+
+**Backend Services**
+- **Transaction Database**: PostgreSQL with encryption
+- **Recurring Billing**: Stripe Subscriptions
+- **Webhook Handling**: Process payment events
+- **Notification System**: SendGrid for receipts
+
+**Security**
+- **Data Encryption**: AES-256 for sensitive data
+- **Tokenization**: Stripe handles card tokenization
+- **Audit Logging**: Track all financial transactions
+- **Fraud Detection**: Stripe Radar
+
+#### 2.6.3 Data Models
+```
+Donation {
+  id: UUID
+  user_id: UUID
+  organization_id: UUID
+  amount: decimal
+  currency: string
+  type: enum (one_time, recurring)
+  status: enum (pending, completed, failed, refunded)
+  stripe_payment_id: string
+  created_at: timestamp
+}
+
+RecurringDonation {
+  id: UUID
+  user_id: UUID
+  amount: decimal
+  frequency: enum (monthly, quarterly)
+  allocation_type: enum (fixed_org, algorithm_driven, user_selected)
+  organization_ids: array<UUID> (nullable)
+  stripe_subscription_id: string
+  active: boolean
+  next_charge_date: date
+}
+```
+
+---
+
+### 2.7 IMPACT REPORTING & MONTHLY SUMMARIES
+
+#### 2.7.1 Features
+- Monthly personalized impact reports
+- Organization updates on fund usage
+- Data visualizations (charts, infographics)
+- Stories from beneficiaries
+- Aggregate impact metrics
+
+#### 2.7.2 Technical Requirements
+
+**Reporting Engine**
+- **Report Generation**: Scheduled jobs (monthly)
+- **Template Engine**: Handlebars or React Email
+- **PDF Generation**: Puppeteer or PDFKit
+- **Data Visualization**: D3.js, Chart.js, or Recharts
+
+**Content Aggregation**
+- **Organization APIs**: Integrate with org reporting systems
+- **Data Validation**: Verify impact claims
+- **Story Curation**: AI-assisted selection of beneficiary stories
+
+**Delivery**
+- **Email**: SendGrid with custom templates
+- **In-App**: Dedicated "Impact" section
+- **Push Notifications**: Firebase Cloud Messaging
+
+#### 2.7.3 Data Models
+```
+ImpactReport {
+  id: UUID
+  user_id: UUID
+  period_start: date
+  period_end: date
+  total_donated: decimal
+  organizations_supported: integer
+  people_impacted: integer
+  metrics: JSON
+  generated_at: timestamp
+}
+
+OrganizationUpdate {
+  id: UUID
+  organization_id: UUID
+  conflict_id: UUID
+  title: string
+  description: text
+  impact_metrics: JSON
+  media_urls: array<string>
+  published_at: timestamp
+}
+```
+
+---
+
+### 2.8 LIVE DONATION MAP & VISUALIZATION
+
+#### 2.8.1 Features
+- Real-time global donation map
+- Animated donation arrows (origin → destination)
+- Aggregate donation flows
+- Interactive exploration
+- Privacy-preserving (no personal data shown)
+
+#### 2.8.2 Technical Requirements
+
+**Frontend Visualization**
+- **Map Library**: Mapbox GL JS or Deck.gl
+- **3D Globe**: Three.js with globe visualization
+- **Animation**: D3.js for smooth transitions
+- **WebGL**: Hardware-accelerated rendering
+
+**Real-time Data**
+- **WebSocket Server**: Socket.io or native WebSockets
+- **Message Broker**: Redis Pub/Sub or AWS IoT
+- **Data Aggregation**: Stream processing with Apache Flink
+- **Privacy**: Aggregate data to city/region level only
+
+**Backend**
+- **Real-time DB**: Firebase Realtime Database or Supabase
+- **Caching**: Redis for recent donations
+- **Rate Limiting**: Prevent abuse/spam
+
+#### 2.8.3 Implementation Details
+```javascript
+// Anonymized donation event
+{
+  origin_country: "US",
+  origin_region: "Northeast",
+  destination_country: "Ukraine",
+  amount_range: "10-50", // Bucketed for privacy
+  timestamp: 1234567890,
+  cause_category: "humanitarian_aid"
+}
+```
+
+---
+
+### 2.9 GAMIFICATION & BADGES
+
+#### 2.9.1 Features
+- Achievement badges (first donation, streaks, milestones)
+- Donation leaderboards (optional, privacy-respecting)
+- Progress tracking
+- Social sharing of achievements
+- Monthly challenges
+
+#### 2.9.2 Technical Requirements
+
+**Badge System**
+- **Achievement Engine**: Custom rule-based system
+- **Badge Assets**: SVG graphics with React Native SVG
+- **Progression Tracking**: Redis for real-time counters
+
+**Gamification Logic**
+- **Event Triggers**: Database triggers or event listeners
+- **Badge Awards**: Background jobs check eligibility
+- **Notification**: Push notification on badge unlock
+
+**Social Features**
+- **Sharing**: Deep links with Open Graph metadata
+- **Leaderboards**: Opt-in only, regional/global views
+- **Privacy**: Anonymous usernames option
+
+#### 2.9.3 Badge Examples
+```
+Badges:
+- First Step: First donation
+- Globetrotter: Donated to 5+ countries
+- Consistent Impact: 6-month donation streak
+- Trailblazer: Donated to newly added conflict
+- Community Builder: Referred 3+ friends
+- Humanitarian Hero: $1000+ lifetime donations
+```
+
+---
+
+### 2.10 ORGANIZATION VERIFICATION & TRUST LAYER
+
+#### 2.10.1 Features
+- Multi-criteria verification system
+- Third-party ratings integration
+- Financial transparency scores
+- Regular re-verification
+- User-reported concerns handling
+
+#### 2.10.2 Technical Requirements
+
+**Verification Sources**
+- **Charity Navigator**: API integration for ratings
+- **GuideStar/Candid**: 501(c)(3) verification
+- **Give Well**: Effectiveness research
+- **Better Business Bureau**: Accreditation status
+- **Manual Review**: Human verification team
+
+**Verification Criteria**
+1. Legal registration (IRS 501(c)(3) or equivalent)
+2. Financial transparency (public tax forms)
+3. Third-party ratings (Charity Navigator 3+ stars)
+4. Ground presence verification
+5. Impact reporting capability
+
+**Data Models**
+```
+OrganizationVerification {
+  organization_id: UUID
+  verification_status: enum (verified, pending, rejected)
+  charity_navigator_rating: float
+  charity_navigator_url: url
+  tax_id: string (encrypted)
+  last_verified: timestamp
+  verification_notes: text
+  financial_transparency_score: float
+}
+```
+
+---
+
+## 3. Technical Architecture Overview
+
+### 3.1 System Architecture
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                     MOBILE APP LAYER                     │
+│            React Native / Flutter (iOS/Android)          │
+└─────────────────────────────────────────────────────────┘
+                            │
+                            ↓
+┌─────────────────────────────────────────────────────────┐
+│                      API GATEWAY                         │
+│          (Kong / AWS API Gateway / nginx)                │
+└─────────────────────────────────────────────────────────┘
+                            │
+         ┌──────────────────┼──────────────────┐
+         ↓                  ↓                   ↓
+┌────────────────┐  ┌────────────────┐  ┌────────────────┐
+│  User Service  │  │Content Service │  │Payment Service │
+│   (Node.js)    │  │   (Python)     │  │   (Node.js)    │
+└────────────────┘  └────────────────┘  └────────────────┘
+         │                  │                   │
+         ↓                  ↓                   ↓
+┌────────────────┐  ┌────────────────┐  ┌────────────────┐
+│  PostgreSQL    │  │  Elasticsearch │  │  Stripe API    │
+└────────────────┘  └────────────────┘  └────────────────┘
+
+┌─────────────────────────────────────────────────────────┐
+│              DATA PIPELINE & ML SERVICES                 │
+│  ┌─────────────┐  ┌──────────────┐  ┌────────────────┐ │
+│  │Web Scrapers │→ │AI Summarizer │→ │Recommendation  │ │
+│  │  (Scrapy)   │  │  (Claude API)│  │Engine (Python) │ │
+│  └─────────────┘  └──────────────┘  └────────────────┘ │
+└─────────────────────────────────────────────────────────┘
+```
+
+### 3.2 Recommended Tech Stack Summary
+
+**Frontend**
+- Mobile: React Native with Expo
+- State: Redux Toolkit
+- Navigation: React Navigation
+- UI: React Native Paper
+
+**Backend**
+- API: Node.js + Express (user/payment) + Python FastAPI (ML/AI)
+- Authentication: Firebase Auth or Supabase
+- Database: PostgreSQL (primary) + Redis (caching)
+- Search: Elasticsearch
+
+**AI & ML**
+- LLM: Claude API (Anthropic) for summarization
+- ML Framework: Python scikit-learn
+- Vector DB: Pinecone
+
+**Infrastructure**
+- Cloud: AWS or Google Cloud Platform
+- CDN: Cloudflare
+- Monitoring: Datadog or New Relic
+- Error Tracking: Sentry
+
+**Third-Party Services**
+- Payments: Stripe Connect
+- Maps: Mapbox
+- Email: SendGrid
+- Push Notifications: Firebase Cloud Messaging
+- Analytics: Mixpanel
+
+---
+
+## 4. Development Phases
+
+### Phase 1: MVP (3-4 months)
+- User authentication & onboarding
+- Basic card interface with 5-10 conflicts
+- Manual content curation (no AI yet)
+- One-time donations via Stripe
+- Basic impact reporting
+
+### Phase 2: Core Features (3-4 months)
+- AI-powered content generation
+- Recommendation algorithm v1
+- Recurring donations
+- Badge system basics
+- Organization verification process
+
+### Phase 3: Engagement Features (2-3 months)
+- Live donation map
+- Additional actions (protests/petitions)
+- Advanced gamification
+- Social sharing
+- Monthly challenges
+
+### Phase 4: Scale & Optimize (Ongoing)
+- Machine learning model refinement
+- Performance optimization
+- Additional integrations
+- International expansion
+- Advanced analytics
+
+---
+
+## 5. Key Considerations & Risks
+
+### 5.1 Ethical Considerations
+- **Content Sensitivity**: Conflict content must be handled with care
+- **Privacy**: User donation data is highly sensitive
+- **Bias Prevention**: AI summaries must be objective and fact-checked
+- **Verification Rigor**: Only legitimate organizations should be featured
+- **Gamification Ethics**: Avoid trivializing serious humanitarian crises
+
+### 5.2 Technical Risks
+- **Data Freshness**: Real-time conflict tracking is challenging
+- **AI Hallucinations**: LLMs may generate inaccurate content
+- **Scraping Reliability**: News sites may block or change structure
+- **Scale**: Real-time donation map may have performance issues
+- **Payment Complexity**: International donations have regulatory challenges
+
+### 5.3 Compliance & Legal
+- **Financial Regulations**: Comply with payment processing laws
+- **Data Privacy**: GDPR, CCPA compliance
+- **Nonprofit Regulations**: Understand intermediary platform rules
+- **Content Liability**: Terms of service for user-generated content
+- **International Laws**: Different regulations per country
+
+---
+
+## 6. Success Metrics (KPIs)
+
+### User Engagement
+- Daily Active Users (DAU) / Monthly Active Users (MAU)
+- Session duration
+- Cards viewed per session
+- Swipe-to-donation conversion rate
+
+### Impact Metrics
+- Total donations processed
+- Number of organizations supported
+- Average donation amount
+- Recurring donation adoption rate
+
+### Retention
+- Day 1, 7, 30 retention rates
+- Churn rate
+- Donation frequency
+
+### Content Quality
+- AI summary accuracy (human evaluation)
+- Content update frequency
+- Source diversity
+
+---
+
+## 7. Next Steps
+
+1. **Validate Assumptions**: User research and interviews
+2. **Design System**: Create UI/UX mockups
+3. **Technical Proof of Concept**: Test AI summarization quality
+4. **Partnership Outreach**: Connect with NGOs for data partnerships
+5. **Funding Strategy**: Determine business model (fee structure, grants)
+6. **Team Building**: Hire engineers, designers, content moderators
+7. **Legal Consultation**: Engage lawyers for compliance
+
+---
+
+This PRD provides a comprehensive foundation for building your humanitarian donation platform. Each feature has been broken down with specific technical requirements to guide development. Would you like me to dive deeper into any specific section?

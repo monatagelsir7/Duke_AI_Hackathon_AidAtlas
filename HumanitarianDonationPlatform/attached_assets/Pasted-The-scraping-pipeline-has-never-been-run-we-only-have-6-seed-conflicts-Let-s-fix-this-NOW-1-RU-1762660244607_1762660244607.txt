@@ -1,0 +1,35 @@
+The scraping pipeline has never been run - we only have 6 seed conflicts. Let's fix this NOW:
+
+1. RUN THE PIPELINE IMMEDIATELY:
+   - Trigger the scraping pipeline right now with: daysBack: 30, processLimit: 50
+   - Show me how many conflicts were scraped from ReliefWeb
+   - Show me 5 complete examples of the newly scraped conflicts with all fields
+   - Confirm they're being stored properly
+
+2. AUTO-PUBLISH SCRAPED CONFLICTS (remove admin approval bottleneck):
+   - Modify the pipeline to automatically add scraped conflicts directly to the conflicts table
+   - Skip the conflict_approvals queue for now - we need real data live immediately
+   - Add a field "source: 'reliefweb'" and "needsReview: false" to track origin
+   - We can add admin review back later, but users need comprehensive data NOW
+
+3. SET UP AUTOMATIC DAILY SCRAPING:
+   - Create a cron job or scheduled task that runs the pipeline every 24 hours at midnight UTC
+   - Use daysBack: 7 for daily updates (we don't need to re-scrape old data)
+   - Log to console when scraping starts, completes, and how many new conflicts were found
+   - Handle errors gracefully (don't crash if ReliefWeb is down)
+
+4. EXPAND TO ADDITIONAL TRUSTED SOURCES:
+   You already have ACLED and ICRC documented but not implemented. Add them:
+   - ACLED API (https://acleddata.com) - for conflict event data
+   - ICRC Situation Reports RSS (https://www.icrc.org) - for protection concerns
+   - Keep using ReliefWeb as primary source
+   - Merge data from all sources, removing duplicates by country
+
+5. VERIFY IT'S WORKING:
+   After implementing, show me:
+   - Total number of conflicts now in database (should be 30-50+, not just 6)
+   - Breakdown by region (how many in Africa, Middle East, South Asia, etc.)
+   - Confirmation that cron job is scheduled
+   - Example of one conflict that came from the pipeline with all fields populated
+
+This is critical - our users are only seeing 6 conflicts when there are 20+ active humanitarian crises worldwide. We need comprehensive, auto-updating data from trusted sources.

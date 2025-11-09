@@ -1,0 +1,99 @@
+// routes/verification.js
+const express = require('express');
+const router = express.Router();
+const VerificationPipeline = require('../services/verification_pipeline');
+const TrustScoreService = require('../services/trust_score_service');
+const DocumentVerificationService = require('../services/document_verification_service');
+const multer = require('multer');
+
+const upload = multer({ 
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 } // 10MB
+});
+
+// Submit organization for verification
+router.post('/api/organizations/verify', authMiddleware, async (req, res) => {
+  const organizationData = req.body;
+  
+  try {
+    // Create organization record
+    const org = await createOrganization(organizationData);
+    
+    // Start verification pipeline
+    const pipeline = new VerificationPipeline();
+    const result = await pipeline.verifyOrganization(org.id);
+    
+    res.json({
+      success: true,
+      organization_id: org.id,
+      verification_result: result
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Verification failed' });
+  }
+});
+
+// Upload verification document
+router.post('/api/organizations/:id/documents',
+  authMiddleware,
+  upload.single('document'),
+  async (req, res) => {
+    const { id: organizationId } = req.params;
+    const { document_type } = req.body;
+    const file = req.file;
+    
+    if (!file) {
+      return res.status(400).json({ error: 'No file uploaded' });
+    }
+    
+    try {
+      const docService = new DocumentVerificationService();
+      const result = await docService.verifyDocument(
+        organizationId,
+        document_type,
+        file.buffer
+      );
+      
+      res.json({
+        success: true,
+        verification_result: result
+      });
+    } catch (error) {
+      res.status(500).json({ error: 'Document verification failed' });
+    }
+  }
+);
+
+// Get organization trust score
+router.get('/api/organizations/:id/trust-score', async (req, res) => {
+  const { id } = req.params;
+  
+  try {
+    const trustService = new TrustScoreService();
+    const score = await trustService.calculateTrustScore(id);
+    
+    res.json(score);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to calculate trust score' });
+  }
+});
+
+// Report an organization
+router.post('/api/organizations/:id/report',
+  authMiddleware,
+  async (req, res) => {
+    const { id: organizationId } = req.params;
+    const { report_type, description, evidence_urls } = req.body;
+    
+    try {
+      await db.query(`
+        INSERT INTO organization_reports (
+          organization_id, user_id, report_type, description, evidence_urls
+        ) VALUES ($1, $2, $3, $4, $5)
+      `, [
+        organizationId,
+        req.user.id,
+        report_type,
+        description,
+        evidence_urls || []
+      ]);

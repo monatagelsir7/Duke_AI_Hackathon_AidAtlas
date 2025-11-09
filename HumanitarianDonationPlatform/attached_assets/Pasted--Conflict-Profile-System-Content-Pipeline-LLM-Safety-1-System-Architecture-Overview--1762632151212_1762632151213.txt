@@ -1,0 +1,921 @@
+# Conflict Profile System - Content Pipeline & LLM Safety
+
+## 1. System Architecture Overview
+
+```
+[Trusted Data Sources] 
+        ↓
+[Web Scraping Layer]
+        ↓
+[Content Aggregation & Deduplication]
+        ↓
+[LLM Processing with Structured Output]
+        ↓
+[Fact-Checking & Validation Layer]
+        ↓
+[Admin Review Queue] ← NEW CONFLICTS REQUIRE APPROVAL
+        ↓
+[Published Conflict Profiles] → User-facing cards
+        ↓
+[Daily Update Cycle]
+```
+
+---
+
+## 2. Trusted Data Sources (Preventing Hallucinations)
+
+### Primary Strategy: START WITH VERIFIED SOURCES
+**Key Principle**: Don't let the LLM decide what's a conflict. Use authoritative sources that have already done the verification.
+
+### Tier 1: Authoritative Humanitarian Sources (Ground Truth)
+These organizations already verify conflicts before reporting:
+
+1. **UN OCHA ReliefWeb** (https://reliefweb.int/)
+   - API: https://api.reliefweb.int/v1/reports
+   - Pre-verified humanitarian crises
+   - Updates daily
+   - Structured data format
+
+2. **ACLED - Armed Conflict Location & Event Data** (https://acleddata.com/)
+   - API: Available with free research account
+   - Real-time conflict event tracking
+   - Geographic precision
+   - Academic-grade verification
+
+3. **ICRC - International Committee of the Red Cross** (https://www.icrc.org/)
+   - RSS feeds for conflict updates
+   - Only reports where they have ground presence
+   - Highly credible
+
+4. **UNHCR - Refugee Agency** (https://data.unhcr.org/)
+   - API: https://api.unhcr.org/
+   - Tracks displacement = indicator of conflict
+   - Population statistics
+
+5. **WHO Emergency Response** (https://www.who.int/emergencies)
+   - Health emergency declarations
+   - Often first to identify escalations
+
+6. **GDELT Project** (https://www.gdeltproject.org/)
+   - Global conflict event database
+   - 100M+ events tracked
+   - API available
+   - Requires filtering/validation
+
+### Tier 2: News Aggregators (Secondary Verification)
+Use for updates on existing conflicts only:
+
+- **Reuters API** (https://www.reuters.com/)
+- **AP News API** (https://developer.ap.org/)
+- **BBC News API**
+- **NewsAPI.org** (Aggregator)
+
+**Critical Rule**: News sources ALONE cannot trigger new conflict creation - they only update existing ones.
+
+---
+
+## 3. Data Scraping Infrastructure
+
+### Technology Stack
+
+```yaml
+Web Scraping:
+  - Framework: Scrapy (Python) - Most robust for complex scraping
+  - Alternative: Playwright (for JavaScript-heavy sites)
+  - Proxy Management: ScraperAPI or Bright Data (avoid IP bans)
+  - Scheduling: Apache Airflow (orchestrate daily runs)
+  
+Storage:
+  - Raw Data: AWS S3 or Google Cloud Storage
+  - Structured Data: PostgreSQL + Elasticsearch
+  - Cache: Redis (for recent articles)
+  
+Processing Queue:
+  - Message Broker: RabbitMQ or AWS SQS
+  - Workers: Celery (Python task queue)
+```
+
+### Implementation Example: Scraping UN OCHA ReliefWeb
+
+```python
+# scrapers/reliefweb_scraper.py
+import scrapy
+import requests
+from datetime import datetime, timedelta
+import json
+
+class ReliefWebScraper:
+    """
+    Scrape UN OCHA ReliefWeb for verified humanitarian crises
+    """
+    
+    BASE_URL = "https://api.reliefweb.int/v1/reports"
+    
+    def __init__(self):
+        self.session = requests.Session()
+    
+    def fetch_recent_reports(self, days_back=1):
+        """
+        Fetch reports from last N days
+        """
+        date_from = (datetime.now() - timedelta(days=days_back)).strftime('%Y-%m-%d')
+        
+        params = {
+            'appname': 'humanitarian-app',
+            'profile': 'full',
+            'preset': 'latest',
+            'slim': 0,
+            'query': {
+                'value': f'date.created:[{date_from} TO *]',
+                'operator': 'AND'
+            },
+            'filter': {
+                'field': 'primary_country.iso3',
+                'operator': 'AND'
+            },
+            'fields': {
+                'include': [
+                    'id',
+                    'title',
+                    'body',
+                    'date',
+                    'primary_country',
+                    'country',
+                    'disaster',
+                    'vulnerable_groups',
+                    'theme',
+                    'source',
+                    'url'
+                ]
+            },
+            'limit': 1000
+        }
+        
+        response = self.session.post(
+            self.BASE_URL,
+            json=params,
+            headers={'Content-Type': 'application/json'}
+        )
+        
+        if response.status_code == 200:
+            return response.json()['data']
+        else:
+            raise Exception(f"ReliefWeb API error: {response.status_code}")
+    
+    def extract_conflicts(self, reports):
+        """
+        Extract conflict information from reports
+        """
+        conflicts_by_country = {}
+        
+        for report in reports:
+            fields = report['fields']
+            
+            # Primary country affected
+            if 'primary_country' in fields:
+                country_data = fields['primary_country']
+                country_code = country_data['iso3']
+                country_name = country_data['name']
+                
+                if country_code not in conflicts_by_country:
+                    conflicts_by_country[country_code] = {
+                        'country_name': country_name,
+                        'country_code': country_code,
+                        'reports': [],
+                        'disasters': set(),
+                        'themes': set(),
+                        'vulnerable_groups': set(),
+                        'sources': set()
+                    }
+                
+                # Aggregate data
+                conflict = conflicts_by_country[country_code]
+                conflict['reports'].append({
+                    'title': fields.get('title'),
+                    'body': fields.get('body', ''),
+                    'url': fields.get('url'),
+                    'date': fields.get('date', {}).get('created'),
+                    'source': fields.get('source', [{}])[0].get('name', 'Unknown')
+                })
+                
+                # Extract structured metadata
+                if 'disaster' in fields:
+                    for disaster in fields['disaster']:
+                        conflict['disasters'].add(disaster['name'])
+                
+                if 'theme' in fields:
+                    for theme in fields['theme']:
+                        conflict['themes'].add(theme['name'])
+                
+                if 'vulnerable_groups' in fields:
+                    for group in fields['vulnerable_groups']:
+                        conflict['vulnerable_groups'].add(group['name'])
+        
+        # Convert sets to lists for JSON serialization
+        for conflict in conflicts_by_country.values():
+            conflict['disasters'] = list(conflict['disasters'])
+            conflict['themes'] = list(conflict['themes'])
+            conflict['vulnerable_groups'] = list(conflict['vulnerable_groups'])
+        
+        return conflicts_by_country
+
+
+# Example usage in Airflow DAG
+def scrape_reliefweb_task():
+    scraper = ReliefWebScraper()
+    reports = scraper.fetch_recent_reports(days_back=1)
+    conflicts = scraper.extract_conflicts(reports)
+    
+    # Store in database
+    store_scraped_data(conflicts, source='reliefweb')
+    
+    return conflicts
+```
+
+### Scraping ACLED (Conflict Events)
+
+```python
+# scrapers/acled_scraper.py
+import requests
+from datetime import datetime, timedelta
+
+class ACLEDScraper:
+    """
+    Scrape ACLED for real-time conflict events
+    Requires free API key: https://developer.acleddata.com/
+    """
+    
+    BASE_URL = "https://api.acleddata.com/acled/read"
+    
+    def __init__(self, api_key, email):
+        self.api_key = api_key
+        self.email = email
+    
+    def fetch_recent_events(self, days_back=7):
+        """
+        Fetch conflict events from last N days
+        """
+        date_from = (datetime.now() - timedelta(days=days_back)).strftime('%Y-%m-%d')
+        date_to = datetime.now().strftime('%Y-%m-%d')
+        
+        params = {
+            'key': self.api_key,
+            'email': self.email,
+            'event_date': f'{date_from}|{date_to}',
+            'event_date_where': 'BETWEEN',
+            'limit': 5000
+        }
+        
+        response = requests.get(self.BASE_URL, params=params)
+        
+        if response.status_code == 200:
+            return response.json()['data']
+        else:
+            raise Exception(f"ACLED API error: {response.status_code}")
+    
+    def identify_active_conflicts(self, events):
+        """
+        Identify countries with significant conflict activity
+        """
+        conflict_activity = {}
+        
+        for event in events:
+            country = event['country']
+            
+            if country not in conflict_activity:
+                conflict_activity[country] = {
+                    'country': country,
+                    'iso3': event['iso'],
+                    'event_count': 0,
+                    'fatalities': 0,
+                    'event_types': set(),
+                    'actors': set(),
+                    'locations': set()
+                }
+            
+            activity = conflict_activity[country]
+            activity['event_count'] += 1
+            activity['fatalities'] += int(event.get('fatalities', 0))
+            activity['event_types'].add(event['event_type'])
+            activity['actors'].add(event['actor1'])
+            activity['locations'].add(event['location'])
+        
+        # Convert sets to lists
+        for activity in conflict_activity.values():
+            activity['event_types'] = list(activity['event_types'])
+            activity['actors'] = list(activity['actors'])
+            activity['locations'] = list(activity['locations'])
+        
+        # Filter: Only return countries with significant activity
+        # Threshold: 10+ events OR 50+ fatalities in past 7 days
+        significant_conflicts = {
+            country: data 
+            for country, data in conflict_activity.items()
+            if data['event_count'] >= 10 or data['fatalities'] >= 50
+        }
+        
+        return significant_conflicts
+```
+
+---
+
+## 4. Content Aggregation & Deduplication
+
+### Combining Multiple Sources
+
+```python
+# pipeline/content_aggregator.py
+from datetime import datetime
+import hashlib
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+
+class ContentAggregator:
+    """
+    Aggregate content from multiple sources and deduplicate
+    """
+    
+    def __init__(self):
+        self.vectorizer = TfidfVectorizer(max_features=100)
+    
+    def merge_sources(self, reliefweb_data, acled_data, news_data):
+        """
+        Merge data from different sources
+        """
+        conflicts = {}
+        
+        # Start with authoritative sources
+        for country_code, data in reliefweb_data.items():
+            conflicts[country_code] = {
+                'country_code': country_code,
+                'country_name': data['country_name'],
+                'source_reliefweb': True,
+                'source_acled': False,
+                'verification_level': 'verified',  # ReliefWeb is pre-verified
+                'reports': data['reports'],
+                'metadata': {
+                    'disasters': data.get('disasters', []),
+                    'themes': data.get('themes', []),
+                    'vulnerable_groups': data.get('vulnerable_groups', [])
+                }
+            }
+        
+        # Add ACLED data (also verified)
+        for country, data in acled_data.items():
+            country_code = data['iso3']
+            
+            if country_code in conflicts:
+                conflicts[country_code]['source_acled'] = True
+                conflicts[country_code]['acled_data'] = {
+                    'event_count': data['event_count'],
+                    'fatalities': data['fatalities'],
+                    'event_types': data['event_types']
+                }
+            else:
+                # ACLED identifies new conflict - needs admin review
+                conflicts[country_code] = {
+                    'country_code': country_code,
+                    'country_name': country,
+                    'source_reliefweb': False,
+                    'source_acled': True,
+                    'verification_level': 'pending_review',  # Admin must approve
+                    'acled_data': {
+                        'event_count': data['event_count'],
+                        'fatalities': data['fatalities'],
+                        'event_types': data['event_types']
+                    }
+                }
+        
+        # News data ONLY updates existing conflicts
+        for article in news_data:
+            # Extract country from article (using NER or existing metadata)
+            country_code = self.extract_country(article)
+            
+            if country_code in conflicts:
+                # Only add to existing conflicts
+                if 'news_articles' not in conflicts[country_code]:
+                    conflicts[country_code]['news_articles'] = []
+                
+                conflicts[country_code]['news_articles'].append({
+                    'title': article['title'],
+                    'url': article['url'],
+                    'source': article['source'],
+                    'published': article['published_date']
+                })
+        
+        return conflicts
+    
+    def deduplicate_articles(self, articles):
+        """
+        Remove duplicate articles using TF-IDF similarity
+        """
+        if len(articles) < 2:
+            return articles
+        
+        # Extract text content
+        texts = [f"{a['title']} {a.get('body', '')}" for a in articles]
+        
+        # Calculate similarity matrix
+        tfidf_matrix = self.vectorizer.fit_transform(texts)
+        similarity_matrix = cosine_similarity(tfidf_matrix)
+        
+        # Keep only unique articles (similarity < 0.8)
+        unique_indices = []
+        seen = set()
+        
+        for i in range(len(articles)):
+            if i in seen:
+                continue
+            
+            unique_indices.append(i)
+            
+            # Mark similar articles as seen
+            for j in range(i + 1, len(articles)):
+                if similarity_matrix[i][j] > 0.8:
+                    seen.add(j)
+        
+        return [articles[i] for i in unique_indices]
+    
+    def extract_country(self, article):
+        """
+        Extract country code from article metadata or content
+        Uses spaCy NER as fallback
+        """
+        # Try metadata first
+        if 'country_code' in article:
+            return article['country_code']
+        
+        # Use NER as fallback (not shown for brevity)
+        # This would use spaCy or similar to extract location entities
+        return None
+```
+
+---
+
+## 5. LLM Processing with Structured Output (Preventing Hallucinations)
+
+### Key Strategy: Force Structured Responses + Explicit Source Citations
+
+```python
+# pipeline/llm_processor.py
+import anthropic
+import json
+
+class ConflictProfileGenerator:
+    """
+    Use Claude API to generate conflict profiles with strict validation
+    """
+    
+    def __init__(self, api_key):
+        self.client = anthropic.Anthropic(api_key=api_key)
+    
+    def generate_profile(self, conflict_data):
+        """
+        Generate conflict profile with structured output
+        """
+        
+        # Prepare source documents
+        source_documents = self._prepare_sources(conflict_data)
+        
+        # Construct prompt with strict instructions
+        prompt = f"""You are a humanitarian information analyst. Your task is to create a factual summary of a humanitarian crisis based ONLY on the provided verified sources.
+
+CRITICAL RULES:
+1. ONLY use information explicitly stated in the source documents below
+2. NEVER infer or assume information not in the sources
+3. If a source mentions Russia in the context of the Ukraine conflict, Russia is the AGGRESSOR, not the affected region
+4. The affected country is the one experiencing humanitarian crisis (displacement, casualties, infrastructure damage)
+5. You must cite which source each fact comes from
+6. If information is contradictory between sources, note this explicitly
+
+SOURCE DOCUMENTS:
+{json.dumps(source_documents, indent=2)}
+
+Generate a JSON response with this EXACT structure:
+{{
+  "affected_country": {{
+    "name": "Country name",
+    "country_code": "ISO3 code",
+    "confidence": "high/medium/low"
+  }},
+  "conflict_summary": {{
+    "title": "Brief conflict title (max 60 chars)",
+    "overview": "2-3 sentence summary of the humanitarian situation",
+    "start_date": "YYYY-MM-DD or 'ongoing' if unclear",
+    "current_status": "active/escalating/de-escalating/resolved"
+  }},
+  "humanitarian_impact": {{
+    "displaced_population": {{
+      "number": "Number or 'unknown'",
+      "source": "Which source this came from"
+    }},
+    "casualties": {{
+      "number": "Number or 'unknown'",
+      "source": "Which source this came from"
+    }},
+    "affected_groups": [
+      {{
+        "group": "children/women/elderly/refugees/etc",
+        "specific_impact": "How they're affected",
+        "urgency_level": "critical/high/moderate",
+        "source": "Which source"
+      }}
+    ]
+  }},
+  "key_needs": [
+    {{
+      "need": "food/water/shelter/medical/education/protection",
+      "urgency": "critical/high/moderate",
+      "source": "Which source"
+    }}
+  ],
+  "context": {{
+    "root_causes": ["Brief causes from sources only"],
+    "recent_developments": ["Recent events from sources only"]
+  }},
+  "verification": {{
+    "sources_used": ["List all sources used"],
+    "conflicting_information": "Any contradictions between sources",
+    "confidence_score": 0.0-1.0,
+    "reasoning": "Why this confidence score"
+  }}
+}}
+
+IMPORTANT: If you cannot extract this information confidently from the sources, set confidence to "low" and explain why in the reasoning field."""
+
+        # Call Claude API
+        response = self.client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=2000,
+            temperature=0.1,  # Low temperature for factual output
+            messages=[{
+                "role": "user",
+                "content": prompt
+            }]
+        )
+        
+        # Extract JSON from response
+        response_text = response.content[0].text
+        
+        # Parse JSON (with error handling)
+        try:
+            profile = json.loads(response_text)
+            return profile
+        except json.JSONDecodeError:
+            # Try to extract JSON from markdown code blocks
+            if "```json" in response_text:
+                json_text = response_text.split("```json")[1].split("```")[0].strip()
+                profile = json.loads(json_text)
+                return profile
+            else:
+                raise ValueError("LLM did not return valid JSON")
+    
+    def _prepare_sources(self, conflict_data):
+        """
+        Format source data for LLM consumption
+        """
+        sources = []
+        
+        # ReliefWeb reports
+        if 'reports' in conflict_data:
+            for i, report in enumerate(conflict_data['reports'][:5]):  # Limit to 5 most recent
+                sources.append({
+                    "source_id": f"reliefweb_{i}",
+                    "source_name": "UN OCHA ReliefWeb",
+                    "source_credibility": "verified_un_source",
+                    "title": report['title'],
+                    "date": report['date'],
+                    "content": report['body'][:1000],  # Truncate for token limits
+                    "url": report['url']
+                })
+        
+        # ACLED data
+        if 'acled_data' in conflict_data:
+            sources.append({
+                "source_id": "acled_1",
+                "source_name": "Armed Conflict Location & Event Data Project",
+                "source_credibility": "verified_academic_source",
+                "content": f"Conflict events in past 7 days: {conflict_data['acled_data']['event_count']}. "
+                          f"Fatalities: {conflict_data['acled_data']['fatalities']}. "
+                          f"Event types: {', '.join(conflict_data['acled_data']['event_types'])}"
+            })
+        
+        # News articles (for updates only)
+        if 'news_articles' in conflict_data:
+            for i, article in enumerate(conflict_data['news_articles'][:3]):
+                sources.append({
+                    "source_id": f"news_{i}",
+                    "source_name": article['source'],
+                    "source_credibility": "news_media",
+                    "title": article['title'],
+                    "url": article['url'],
+                    "date": article['published']
+                })
+        
+        return sources
+```
+
+### Example LLM Response (Structured JSON)
+
+```json
+{
+  "affected_country": {
+    "name": "Ukraine",
+    "country_code": "UKR",
+    "confidence": "high"
+  },
+  "conflict_summary": {
+    "title": "Ongoing Armed Conflict and Humanitarian Crisis",
+    "overview": "Large-scale armed conflict has resulted in significant civilian casualties, widespread displacement, and destruction of critical infrastructure. Humanitarian needs remain urgent across affected regions, with particular concerns for vulnerable populations.",
+    "start_date": "2022-02-24",
+    "current_status": "active"
+  },
+  "humanitarian_impact": {
+    "displaced_population": {
+      "number": "6.3 million internally displaced",
+      "source": "reliefweb_0"
+    },
+    "casualties": {
+      "number": "10,000+ civilian casualties confirmed",
+      "source": "reliefweb_1"
+    },
+    "affected_groups": [
+      {
+        "group": "children",
+        "specific_impact": "1,000+ education facilities damaged or destroyed, affecting access to schooling",
+        "urgency_level": "critical",
+        "source": "reliefweb_2"
+      },
+      {
+        "group": "elderly",
+        "specific_impact": "Limited mobility makes evacuation difficult, many isolated in conflict zones",
+        "urgency_level": "high",
+        "source": "reliefweb_0"
+      }
+    ]
+  },
+  "key_needs": [
+    {
+      "need": "shelter",
+      "urgency": "critical",
+      "source": "reliefweb_0"
+    },
+    {
+      "need": "medical",
+      "urgency": "critical",
+      "source": "reliefweb_1"
+    },
+    {
+      "need": "food",
+      "urgency": "high",
+      "source": "reliefweb_0"
+    }
+  ],
+  "context": {
+    "root_causes": ["Armed conflict beginning February 2022"],
+    "recent_developments": ["Ongoing military operations", "Winter weather increasing shelter needs"]
+  },
+  "verification": {
+    "sources_used": ["reliefweb_0", "reliefweb_1", "reliefweb_2", "acled_1"],
+    "conflicting_information": "None detected",
+    "confidence_score": 0.95,
+    "reasoning": "Multiple verified UN sources with consistent information. High confidence in affected country identification and humanitarian needs assessment."
+  }
+}
+```
+
+---
+
+## 6. Fact-Checking & Validation Layer
+
+### Multi-Step Validation Process
+
+```python
+# pipeline/validator.py
+import re
+from typing import Dict, List
+
+class ConflictValidator:
+    """
+    Validate LLM-generated profiles before admin review
+    """
+    
+    # Known aggressor patterns to catch misclassification
+    AGGRESSOR_KEYWORDS = [
+        'invasion', 'invaded', 'attacking', 'aggressor',
+        'military operation', 'launched attack'
+    ]
+    
+    def validate_profile(self, profile: Dict, raw_data: Dict) -> Dict:
+        """
+        Comprehensive validation of generated profile
+        Returns validation result with errors/warnings
+        """
+        validation_result = {
+            'is_valid': True,
+            'errors': [],
+            'warnings': [],
+            'confidence_adjustments': []
+        }
+        
+        # 1. Validate affected country identification
+        country_validation = self._validate_affected_country(profile, raw_data)
+        if not country_validation['valid']:
+            validation_result['errors'].extend(country_validation['errors'])
+            validation_result['is_valid'] = False
+        
+        # 2. Check for aggressor misclassification
+        aggressor_check = self._check_aggressor_misclassification(profile, raw_data)
+        if aggressor_check['potential_issue']:
+            validation_result['errors'].append(aggressor_check['message'])
+            validation_result['is_valid'] = False
+        
+        # 3. Validate source citations
+        citation_check = self._validate_citations(profile, raw_data)
+        if not citation_check['valid']:
+            validation_result['warnings'].extend(citation_check['warnings'])
+        
+        # 4. Check for hallucination indicators
+        hallucination_check = self._detect_hallucinations(profile, raw_data)
+        if hallucination_check['likely_hallucination']:
+            validation_result['errors'].append(hallucination_check['message'])
+            validation_result['is_valid'] = False
+        
+        # 5. Validate confidence scores
+        confidence_check = self._validate_confidence(profile)
+        if not confidence_check['valid']:
+            validation_result['warnings'].append(confidence_check['message'])
+        
+        return validation_result
+    
+    def _validate_affected_country(self, profile, raw_data):
+        """
+        Ensure the identified affected country matches source data
+        """
+        identified_country = profile['affected_country']['country_code']
+        
+        # Check against known affected countries in raw data
+        source_countries = set()
+        
+        if 'country_code' in raw_data:
+            source_countries.add(raw_data['country_code'])
+        
+        if 'reports' in raw_data:
+            for report in raw_data['reports']:
+                # Extract country from report metadata
+                pass  # Implementation depends on data structure
+        
+        if identified_country not in source_countries and source_countries:
+            return {
+                'valid': False,
+                'errors': [
+                    f"LLM identified {identified_country} as affected country, "
+                    f"but sources indicate: {', '.join(source_countries)}"
+                ]
+            }
+        
+        return {'valid': True, 'errors': []}
+    
+    def _check_aggressor_misclassification(self, profile, raw_data):
+        """
+        Detect if an aggressor nation is misclassified as affected country
+        
+        Example: Russia invading Ukraine -> Russia should NOT be the affected country
+        """
+        affected_country = profile['affected_country']['name'].lower()
+        overview = profile['conflict_summary']['overview'].lower()
+        
+        # Check if the affected country is mentioned as aggressor in the text
+        for keyword in self.AGGRESSOR_KEYWORDS:
+            if keyword in overview:
+                # Extract context around keyword
+                context = self._extract_context(overview, keyword, window=50)
+                
+                # Check if affected country is the subject of aggressor action
+                if affected_country in context.split(keyword)[0]:
+                    return {
+                        'potential_issue': True,
+                        'message': f"Potential misclassification: {affected_country} appears as aggressor in context: '{context}'"
+                    }
+        
+        return {'potential_issue': False}
+    
+    def _validate_citations(self, profile, raw_data):
+        """
+        Ensure all facts have valid source citations
+        """
+        warnings = []
+        
+        # Check humanitarian impact sources
+        if 'humanitarian_impact' in profile:
+            impact = profile['humanitarian_impact']
+            
+            if 'displaced_population' in impact:
+                if 'source' not in impact['displaced_population']:
+                    warnings.append("Displaced population number lacks source citation")
+            
+            if 'affected_groups' in impact:
+                for group in impact['affected_groups']:
+                    if 'source' not in group:
+                        warnings.append(f"Affected group '{group['group']}' lacks source citation")
+        
+        return {
+            'valid': len(warnings) == 0,
+            'warnings': warnings
+        }
+    
+    def _detect_hallucinations(self, profile, raw_data):
+        """
+        Detect potential LLM hallucinations
+        """
+        # Check for suspiciously specific numbers without sources
+        overview = profile['conflict_summary']['overview']
+        
+        # Look for numbers
+        numbers = re.findall(r'\d+(?:,\d+)*(?:\.\d+)?', overview)
+        
+        if len(numbers) > 2:
+            # Multiple specific numbers without citation = potential hallucination
+            return {
+                'likely_hallucination': True,
+                'message': "Overview contains multiple specific numbers but no inline citations"
+            }
+        
+        # Check for low confidence score
+        confidence = profile['verification']['confidence_score']
+        if confidence < 0.6:
+            return {
+                'likely_hallucination': True,
+                'message': f"Low confidence score ({confidence}) indicates potential unreliability"
+            }
+        
+        return {'likely_hallucination': False}
+    
+    def _validate_confidence(self, profile):
+        """
+        Ensure confidence scores are reasonable
+        """
+        confidence = profile['verification']['confidence_score']
+        
+        # Check if confidence matches the data quality indicators
+        sources_used = len(profile['verification']['sources_used'])
+        
+        if confidence > 0.9 and sources_used < 2:
+            return {
+                'valid': False,
+                'message': "Confidence score too high for limited source count"
+            }
+        
+        return {'valid': True}
+    
+    def _extract_context(self, text, keyword, window=50):
+        """
+        Extract context around a keyword
+        """
+        idx = text.find(keyword)
+        if idx == -1:
+            return ""
+        
+        start = max(0, idx - window)
+        end = min(len(text), idx + len(keyword) + window)
+        
+        return text[start:end]
+```
+
+---
+
+## 7. Admin Review Queue System
+
+### New Conflict Detection & Approval Workflow
+
+```python
+# admin/review_queue.py
+from enum import Enum
+from datetime import datetime
+
+class ConflictStatus(Enum):
+    PENDING_REVIEW = "pending_review"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    NEEDS_REVISION = "needs_revision"
+
+class AdminReviewQueue:
+    """
+    Manage admin review queue for new/updated conflicts
+    """
+    
+    def __init__(self, db_connection):
+        self.db = db_connection
+    
+    def add_to_review_queue(self, conflict_data, trigger_reason):
+        """
+        Add conflict to admin review queue
+        """
+        review_item = {
+            'conflict_id': conflict_data.get('id'),
+            'country_code': conflict_data['country_code'],
+            'country_name': conflict_data['country_name'],
+            'status': ConflictStatus.PENDING_REVIEW.value,
+            'trigger_reason': trigger_reason,  # 'new_conflict', 'major_update', 'low_confidence'
+            'llm_generated_profile': conflict_data['profile'],
+            'source_data': conflict

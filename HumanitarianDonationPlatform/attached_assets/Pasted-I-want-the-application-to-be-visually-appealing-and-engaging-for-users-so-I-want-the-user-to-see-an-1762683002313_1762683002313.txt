@@ -1,0 +1,58 @@
+I want the application to be visually appealing and engaging for users, so I want the user to see an interactive map that shows an arrow originating from their country to the country they are donating for when they make a donation along with a thank you message. Another map that tracks all donations done through the application in the same way should be displayed in the impact page (there’s already stuff in the impact page just put the map underneath it and title it “Good Action Map” so that users can see what other users are donating for in real-time. I want it to look something like GitHub globe but not a copy cat. 
+Overall Stack: 
+Frontend: React + TypeScript (Vite), react-globe.gl, three, Socket.IO client
+Backend: Node.js, Express, Socket.IO, uuid
+Styling: Custom CSS with glassmorphism-inspired theme
+Data: In-memory array (optional note about persisting later)
+
+Backend Requirements
+Scaffold /server with "type": "module" and scripts (dev, start).
+Install express, cors, socket.io, uuid, and nodemon (dev).
+Implement src/index.js:
+Create Express app + HTTP server.
+Configure CORS with CLIENT_ORIGIN env (default *).
+Use express.json(); maintain in-memory donations list.
+Endpoints: GET /health, GET /api/donations, POST /api/donations with validation.
+Generate donation objects { id, donorCountry, recipientCountry, amount?, message?, createdAt }.
+Emit donation:init on connection and donation:new on each POST.
+Optional: prepare for persistence (e.g., DB adapter).
+
+Frontend Requirements
+Scaffold Vite React TS app under /frontend; set "type": "module" in package.json.
+Install packages: react-globe.gl, three, socket.io-client, d3-geo, topojson-client, world-atlas, i18n-iso-countries, @types/d3-geo, @types/topojson-client.
+Config (src/config.ts): API_BASE_URL using VITE_API_URL or default http://localhost:4000.
+Type definitions in src/types.ts for Donation, GlobeArcDatum.
+Country utilities (src/lib/countryData.ts):
+Register English locale for i18n-iso-countries.
+Use world-atlas/countries-110m.json + topojson-client + d3-geo to get centroids.
+Expose getCountryOptions, getCountryCoordinates, getCountryName.
+Donation transforms (src/lib/donationTransforms.ts): map Donation → arc data.
+UI components:
+DonationForm: two country selects, optional amount/message, validation, uses utilities for names.
+DonationGlobe: wraps react-globe.gl, auto-rotating, arcs highlight, fallback placeholder.
+ThankYouCard: displays message + mini globe for latest donation.
+App.tsx:
+Manage state for donations and latest donation.
+Fetch initial data, connect to Socket.IO (websocket transport).
+Convert donations to arcs; show real-time feed (recent donations list).
+Render hero, live globe, donation form, thank-you card, status banners.
+Styling (index.css, App.css):
+Dark gradient background, glass panels, responsive layout, globe placeholders.
+
+Best Practices
+Keep module imports typed (import type ...).
+Handle TypeScript strictness: use helper types for globe data; avoid any by casting with proper interfaces.
+Guard Socket.IO interactions (check IDs before dedupe).
+Validate backend inputs; return descriptive errors.
+Prepare for environment overrides (CLIENT_ORIGIN, VITE_API_URL), default to local dev.
+Bundle size note: react-globe.gl is large—consider future code-splitting.
+
+Suggested Workflow for Replit
+Create repo with /server and /frontend.
+Implement backend first; test via Postman/curl.
+Build frontend utilities and components (country helpers, globes).
+Integrate forms and sockets; verify interactions.
+Apply styling for GitHub-globe feel.
+Run npm run dev (server) and npm run dev (frontend).
+Production check: npm run build (frontend).
+Also we don't have any donations right now because it’s a new website so simulate a few fake donations and pretend like it’s live. It will have to take the user location that’s how technically it would work and based on where they donated.

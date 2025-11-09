@@ -1,0 +1,694 @@
+# Personalization Quiz Design - Questions & Algorithm Strategy
+
+## 1. Quiz Design Philosophy
+
+### Core Principles
+1. **Quick & Engaging**: 7-10 questions max (3-5 minutes)
+2. **Non-overwhelming**: Avoid graphic conflict descriptions
+3. **Actionable Data**: Each answer should map to recommendation features
+4. **Progressive Disclosure**: Start broad, get specific
+5. **Empathy-First**: Frame questions around impact, not tragedy
+
+### Data Collection Goals
+- **Geographic preferences**: Regions/countries of interest
+- **Cause alignment**: What issues resonate most
+- **Vulnerable groups**: Which populations they want to help
+- **Action style**: Emergency vs. long-term support
+- **Giving capacity**: Budget signals without asking directly
+- **Emotional drivers**: Why they want to donate
+
+---
+
+## 2. Recommended Quiz Questions
+
+### Question 1: Geographic Interest (Multi-select)
+**Type**: Visual map-based selection with clickable regions
+
+**Question**: *"Which regions of the world are you most interested in supporting?"*
+
+**Options** (with visual map highlighting):
+- ☐ Middle East & North Africa
+- ☐ Sub-Saharan Africa
+- ☐ Eastern Europe & Central Asia
+- ☐ South Asia
+- ☐ East & Southeast Asia
+- ☐ Latin America & Caribbean
+- ☐ I'm open to supporting any region where help is needed most
+
+**Why this matters**:
+- Direct mapping to conflict locations
+- Tests for bias toward media-covered vs. forgotten crises
+- "Any region" signals willingness for algorithm-driven recommendations
+
+**Data captured**:
+```json
+{
+  "geographic_preference": ["middle_east", "eastern_europe"],
+  "geographic_flexibility": false
+}
+```
+
+---
+
+### Question 2: Cause Categories (Rank top 3)
+**Type**: Drag-and-drop ranking or sequential selection
+
+**Question**: *"Rank your top 3 humanitarian causes that matter most to you"*
+
+**Options** (with icons):
+1. 🏥 Medical & Healthcare
+2. 🍎 Food Security & Nutrition
+3. 💧 Clean Water & Sanitation
+4. 🏠 Shelter & Housing
+5. 👶 Child Protection & Welfare
+6. 👩 Women's Rights & Safety
+7. 📚 Education & Schools
+8. 🧠 Mental Health & Trauma Support
+9. 🛡️ Human Rights & Justice
+10. 🌱 Environmental Displacement
+11. 🚨 Emergency Relief & Rescue
+
+**Why this matters**:
+- Maps directly to organization specializations
+- Ranking reveals priority hierarchy
+- Covers both immediate needs and systemic issues
+
+**Data captured**:
+```json
+{
+  "cause_priorities": [
+    {"cause": "child_protection", "rank": 1, "weight": 1.0},
+    {"cause": "medical_healthcare", "rank": 2, "weight": 0.8},
+    {"cause": "food_security", "rank": 3, "weight": 0.6}
+  ]
+}
+```
+
+---
+
+### Question 3: Vulnerable Populations (Multi-select)
+**Type**: Card-based selection with images/icons
+
+**Question**: *"Which groups do you feel most compelled to help?"*
+
+**Options**:
+- ☐ Children & infants
+- ☐ Women & girls
+- ☐ Elderly & disabled
+- ☐ Refugees & displaced families
+- ☐ Orphans & unaccompanied minors
+- ☐ Survivors of violence or trauma
+- ☐ Local communities affected by conflict
+- ☐ All vulnerable populations equally
+
+**Why this matters**:
+- Filters organizations by target demographic
+- Reveals emotional triggers
+- Helps with impact story personalization
+
+**Data captured**:
+```json
+{
+  "target_demographics": ["children", "refugees"],
+  "demographic_flexibility": false
+}
+```
+
+---
+
+### Question 4: Urgency vs. Sustainability Preference
+**Type**: Slider scale with visual indicators
+
+**Question**: *"What type of impact resonates most with you?"*
+
+**Scale**: [Emergency Response] ←→ [Long-term Development]
+
+**Visual labels**:
+- **Left (1-3)**: "Immediate crisis response - saving lives today"
+  - *Example: Emergency medical care, food distribution, rescue operations*
+- **Middle (4-6)**: "Balanced approach - both urgent needs and lasting solutions"
+  - *Example: Temporary shelter + community rebuilding programs*
+- **Right (7-10)**: "Sustainable change - building systems that last"
+  - *Example: Schools, infrastructure, economic development, policy advocacy*
+
+**Why this matters**:
+- Aligns with organization intervention types
+- Reveals donor psychology (reactive vs. proactive)
+- Affects urgency messaging in profiles
+
+**Data captured**:
+```json
+{
+  "urgency_preference": 4,
+  "intervention_type": "balanced"
+}
+```
+
+---
+
+### Question 5: Conflict Awareness Level
+**Type**: Multiple choice with descriptions
+
+**Question**: *"How do you typically learn about global conflicts?"*
+
+**Options**:
+- 📱 Social media (Twitter, Instagram, TikTok)
+- 📰 News outlets (TV, newspapers, news websites)
+- 🎙️ Podcasts & documentaries
+- 💬 Friends, family, or community discussions
+- 📚 Academic or policy research
+- 🤔 I don't actively follow conflicts, but want to learn more
+
+**Why this matters**:
+- Indicates media literacy and information sources
+- Helps calibrate content complexity
+- Identifies cold-start users who need more education
+
+**Data captured**:
+```json
+{
+  "awareness_level": "moderate",
+  "information_sources": ["social_media", "news_outlets"],
+  "needs_education": false
+}
+```
+
+---
+
+### Question 6: Giving Frequency Intention
+**Type**: Multiple choice with commitment level
+
+**Question**: *"How do you envision supporting humanitarian causes?"*
+
+**Options**:
+- 💝 One-time donations when a cause moves me
+- 📅 Regular monthly giving to stay consistently involved
+- 🎯 Both - monthly base + extra during emergencies
+- 🤝 Non-financial support (sharing, advocating, volunteering info)
+- 🤷 I'm not sure yet, I'm exploring options
+
+**Why this matters**:
+- Predicts churn risk
+- Informs recurring donation nudges
+- Segments user types for messaging
+
+**Data captured**:
+```json
+{
+  "giving_intent": "regular_monthly",
+  "commitment_level": "high",
+  "non_financial_interest": false
+}
+```
+
+---
+
+### Question 7: Organization Trust Factors
+**Type**: Rank top 3 factors
+
+**Question**: *"What's most important to you when choosing where to donate?"*
+
+**Options** (rank top 3):
+1. ⭐ High ratings from charity watchdogs (Charity Navigator, GiveWell)
+2. 💰 Low overhead costs (more money goes directly to programs)
+3. 📊 Transparent reporting on how donations are used
+4. 🏆 Proven track record with measurable impact
+5. 🌍 Local organizations led by people from the affected region
+6. 📸 Personal stories from beneficiaries
+7. 🤝 Recommendations from people I trust
+8. 🏢 Well-known international organizations (Red Cross, UNICEF, etc.)
+
+**Why this matters**:
+- Prioritizes organization attributes in recommendations
+- Reveals skepticism level
+- Guides trust-building content strategy
+
+**Data captured**:
+```json
+{
+  "trust_factors": [
+    {"factor": "transparency", "rank": 1, "weight": 1.0},
+    {"factor": "local_leadership", "rank": 2, "weight": 0.8},
+    {"factor": "charity_ratings", "rank": 3, "weight": 0.6}
+  ]
+}
+```
+
+---
+
+### Question 8: Donation Amount Comfort Range
+**Type**: Range selector (non-judgmental framing)
+
+**Question**: *"What donation range feels comfortable for you to start?"*
+
+**Options** (monthly equivalent shown):
+- 💵 $5-15 per donation (~$10-30/month)
+- 💵💵 $15-50 per donation (~$30-100/month)
+- 💵💵💵 $50-100 per donation (~$100-200/month)
+- 💵💵💵💵 $100+ per donation
+- 🤔 I'd prefer to decide case-by-case
+
+**Subtext**: *"You can always change this - we're just trying to show you relevant opportunities"*
+
+**Why this matters**:
+- Filters organizations by typical donation requests
+- Prevents sticker shock
+- Enables budget-aware recommendations
+
+**Data captured**:
+```json
+{
+  "donation_range": "15-50",
+  "budget_flexibility": true
+}
+```
+
+---
+
+### Question 9: Conflict Severity Preference
+**Type**: Multiple choice with emotional framing
+
+**Question**: *"How do you want to engage with difficult realities?"*
+
+**Options**:
+- 🔥 Show me the most urgent crises, even if they're difficult to read about
+- ⚖️ Balance urgent situations with ongoing needs that get less attention
+- 💙 Focus on positive impact stories and solutions-oriented content
+- 🛡️ Keep content informative but not overwhelming
+
+**Why this matters**:
+- Controls content intensity/graphic nature
+- Prevents compassion fatigue
+- Personalizes emotional tone of profiles
+
+**Data captured**:
+```json
+{
+  "content_intensity": "balanced",
+  "emotional_resilience": "moderate"
+}
+```
+
+---
+
+### Question 10: Personal Connection (Optional)
+**Type**: Open-ended with skip option
+
+**Question**: *"Do you have a personal connection to any humanitarian cause? (Optional)"*
+
+**Examples shown**:
+- *"Family from a conflict region"*
+- *"Worked/volunteered in humanitarian field"*
+- *"Affected by disaster or displacement"*
+- *"Studied related topics"*
+
+**Text input** (100 characters max) + **"Skip" button**
+
+**Why this matters**:
+- Identifies power users and advocates
+- Creates deeper personalization opportunities
+- Flags users who might contribute stories/advocacy
+
+**Data captured**:
+```json
+{
+  "personal_connection": "studied_humanitarian_law",
+  "connection_strength": "strong",
+  "connection_text": "Studied international law, passionate about refugee rights"
+}
+```
+
+---
+
+## 3. Quiz Experience Design
+
+### Visual Flow
+```
+[Welcome Screen]
+"Help us personalize your impact journey"
+↓
+[Progress Bar: 1/10]
+[Question with visual elements]
+[Next Button - always enabled, can skip]
+↓
+[... Questions 2-10 ...]
+↓
+[Processing Screen - Animated]
+"Finding the causes that matter to you..."
+↓
+[Results Preview]
+"Based on your answers, we think you'll care about..."
+[Show 3 sample conflict profiles]
+"Let's get started →"
+```
+
+### UX Best Practices
+1. **Always allow skip**: No question is mandatory except Q1 & Q2
+2. **Show progress**: Visual progress bar
+3. **Allow back navigation**: Users can change answers
+4. **Save incomplete**: Resume quiz later if interrupted
+5. **No judgment**: Positive reinforcement for all answers
+6. **Visual > Text**: Use icons, images, maps when possible
+
+---
+
+## 4. Scoring Algorithm Framework
+
+### Feature Vector Construction
+
+Each user gets a preference vector based on quiz responses:
+
+```python
+user_preference_vector = {
+    # Geographic (one-hot encoded by region)
+    "geo_middle_east": 1.0,
+    "geo_africa": 0.0,
+    "geo_eastern_europe": 1.0,
+    "geo_flexibility": 0.0,
+    
+    # Causes (weighted by rank)
+    "cause_child_protection": 1.0,
+    "cause_medical": 0.8,
+    "cause_food_security": 0.6,
+    # ... other causes: 0.0
+    
+    # Demographics
+    "demo_children": 1.0,
+    "demo_refugees": 1.0,
+    "demo_women": 0.0,
+    
+    # Intervention style (normalized 0-1)
+    "urgency_score": 0.4,  # 4/10
+    
+    # Trust factors (weighted)
+    "trust_transparency": 1.0,
+    "trust_local_led": 0.8,
+    "trust_ratings": 0.6,
+    
+    # Behavioral signals
+    "awareness_level": 0.5,  # moderate
+    "commitment_level": 0.8,  # high
+    "budget_tier": 2,  # $15-50
+    
+    # Content preferences
+    "content_intensity": 0.5,  # balanced
+    "education_needed": false,
+    
+    # Personal
+    "has_personal_connection": true,
+    "connection_strength": 0.8
+}
+```
+
+### Conflict Scoring Formula
+
+For each conflict/organization pair, calculate match score:
+
+```python
+def calculate_recommendation_score(user_vector, conflict_org_pair):
+    score = 0.0
+    
+    # Geographic match (30% weight)
+    geo_match = cosine_similarity(
+        user_vector['geo_*'], 
+        conflict_org_pair['geo_*']
+    )
+    score += 0.30 * geo_match
+    
+    # Cause alignment (25% weight)
+    cause_match = weighted_overlap(
+        user_vector['cause_*'],
+        conflict_org_pair['cause_*']
+    )
+    score += 0.25 * cause_match
+    
+    # Demographic match (20% weight)
+    demo_match = jaccard_similarity(
+        user_vector['demo_*'],
+        conflict_org_pair['demo_*']
+    )
+    score += 0.20 * demo_match
+    
+    # Urgency alignment (10% weight)
+    urgency_diff = abs(
+        user_vector['urgency_score'] - 
+        conflict_org_pair['urgency_level']
+    )
+    urgency_match = 1 - urgency_diff
+    score += 0.10 * urgency_match
+    
+    # Trust factor match (10% weight)
+    trust_match = weighted_overlap(
+        user_vector['trust_*'],
+        conflict_org_pair['org_attributes']
+    )
+    score += 0.10 * trust_match
+    
+    # Recency boost (5% weight)
+    days_old = (today - conflict_org_pair['last_updated']).days
+    recency_score = max(0, 1 - days_old / 30)
+    score += 0.05 * recency_score
+    
+    return score
+```
+
+### Cold Start Strategy
+
+For new users with incomplete quiz data:
+1. **Phase 1 (Quiz only)**: Use quiz responses
+2. **Phase 2 (First 5 swipes)**: Blend quiz + behavioral data (80/20)
+3. **Phase 3 (5-20 swipes)**: Blend quiz + behavioral (50/50)
+4. **Phase 4 (20+ swipes)**: Primarily behavioral with quiz fallback (20/80)
+
+---
+
+## 5. Behavioral Data Integration
+
+### Events to Track Post-Quiz
+
+```python
+user_behavior_events = {
+    # Swipe actions
+    "swipe_up": {  # Interested
+        "conflict_id": "ukraine_2024",
+        "org_id": "unicef_ukraine",
+        "time_spent": 45,  # seconds
+        "weight": 1.0
+    },
+    "swipe_down": {  # Not interested
+        "conflict_id": "yemen_2024",
+        "weight": -0.5
+    },
+    "swipe_pass": {  # Neutral
+        "conflict_id": "haiti_2023",
+        "weight": 0.0
+    },
+    
+    # Deep engagement
+    "view_details": {
+        "conflict_id": "gaza_2024",
+        "time_spent": 120,
+        "weight": 0.8
+    },
+    "share_profile": {
+        "conflict_id": "sudan_2024",
+        "weight": 1.2
+    },
+    
+    # Donations (strongest signal)
+    "donate": {
+        "conflict_id": "ukraine_2024",
+        "org_id": "red_cross_ukraine",
+        "amount": 50,
+        "weight": 2.0
+    },
+    
+    # Non-financial actions
+    "sign_petition": {
+        "conflict_id": "myanmar_2024",
+        "weight": 0.7
+    },
+    "attend_protest": {
+        "conflict_id": "gaza_2024",
+        "weight": 0.8
+    }
+}
+```
+
+### Real-time Preference Updates
+
+After each interaction, update user vector:
+
+```python
+def update_user_preferences(user_id, event):
+    current_vector = get_user_vector(user_id)
+    conflict_features = get_conflict_features(event.conflict_id)
+    
+    # Extract features that led to this interaction
+    relevant_features = extract_features(conflict_features)
+    
+    # Update with learning rate and event weight
+    learning_rate = 0.1
+    event_weight = event.weight
+    
+    for feature in relevant_features:
+        current_vector[feature] += (
+            learning_rate * 
+            event_weight * 
+            (1 - current_vector[feature])  # Move toward 1.0
+        )
+    
+    # Decay old preferences slightly (prevent staleness)
+    for feature in current_vector:
+        if feature not in relevant_features:
+            current_vector[feature] *= 0.99
+    
+    save_user_vector(user_id, current_vector)
+```
+
+---
+
+## 6. Quiz Data Schema
+
+### Database Tables
+
+```sql
+-- Quiz responses
+CREATE TABLE quiz_responses (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    question_id VARCHAR(50) NOT NULL,
+    response_type VARCHAR(20), -- single, multiple, ranked, scale, text
+    response_data JSONB NOT NULL,
+    completed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Computed preference vector
+CREATE TABLE user_preference_vectors (
+    user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    vector_data JSONB NOT NULL,
+    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    update_source VARCHAR(20), -- quiz, behavioral, hybrid
+    version INTEGER DEFAULT 1
+);
+
+-- Quiz version tracking (for A/B testing)
+CREATE TABLE quiz_versions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    version_name VARCHAR(50) UNIQUE NOT NULL,
+    questions JSONB NOT NULL,
+    active BOOLEAN DEFAULT true,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- User quiz history (if they retake)
+CREATE TABLE quiz_history (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    quiz_version_id UUID REFERENCES quiz_versions(id),
+    responses JSONB NOT NULL,
+    completed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+---
+
+## 7. A/B Testing Opportunities
+
+### Quiz Variations to Test
+
+1. **Question order**: Does starting with geography vs. causes change completion?
+2. **Number of questions**: 5 vs. 10 vs. 15 questions - impact on drop-off
+3. **Visual vs. text**: Icon-based vs. text-only options
+4. **Mandatory vs. optional**: Requiring vs. allowing skips
+5. **Donation amount question**: Including vs. excluding budget question
+6. **Emotional framing**: "Help vulnerable people" vs. "Support communities" vs. "Save lives"
+
+### Success Metrics
+- Quiz completion rate
+- Time to complete
+- Prediction accuracy (% of first 10 profiles that get positive engagement)
+- User satisfaction (post-quiz survey)
+- Donation conversion rate
+
+---
+
+## 8. Implementation Checklist
+
+### Phase 1: MVP Quiz
+- [ ] Implement 5 core questions (geo, causes, demographics, urgency, giving intent)
+- [ ] Build basic scoring algorithm
+- [ ] Create user preference vector schema
+- [ ] Design quiz UI with progress bar
+- [ ] Add skip functionality
+- [ ] Store responses in database
+
+### Phase 2: Enhanced Quiz
+- [ ] Add remaining questions (trust, awareness, personal connection)
+- [ ] Implement ranking/drag-drop interfaces
+- [ ] Add visual elements (maps, icons, images)
+- [ ] Build quiz versioning system
+- [ ] Create A/B testing framework
+
+### Phase 3: Behavioral Integration
+- [ ] Track swipe events
+- [ ] Build real-time preference update system
+- [ ] Implement hybrid scoring (quiz + behavior)
+- [ ] Add preference decay mechanism
+- [ ] Create feedback loops for accuracy
+
+### Phase 4: Optimization
+- [ ] Run A/B tests on quiz variations
+- [ ] Analyze question predictive power
+- [ ] Refine scoring weights based on conversion data
+- [ ] Add re-onboarding flow for preference updates
+- [ ] Build "Why am I seeing this?" transparency feature
+
+---
+
+## 9. Privacy & Transparency
+
+### User Controls
+- **View my preferences**: Show what algorithm knows about them
+- **Update preferences**: Retake quiz anytime
+- **Reset algorithm**: Start fresh
+- **Why this recommendation**: Explain each match score
+
+### Data Usage Disclosure
+*"We use your quiz responses and app behavior to show you causes and organizations that match your interests. You can update your preferences anytime in Settings. We never share your personal giving data."*
+
+---
+
+## 10. Example Quiz Result Preview
+
+After completing quiz, show:
+
+```
+🎯 Your Impact Profile
+
+Based on your answers, we'll focus on:
+
+📍 Regions: Middle East, Eastern Europe
+🎗️ Top Causes: Child Protection, Medical Aid, Food Security
+👥 Supporting: Children, Refugees, Women
+⚡ Focus: Balanced (emergency + long-term)
+
+🏆 You'll see organizations that are:
+✓ Transparent about fund usage
+✓ Led by local communities
+✓ Highly rated by charity watchdogs
+
+💡 We'll recommend donations around $15-50
+
+Ready to explore? Let's go! →
+```
+
+This creates transparency and builds trust in the algorithm.
+
+---
+
+Would you like me to:
+1. Design the quiz UI/UX wireframes?
+2. Write the recommendation algorithm code?
+3. Create the API endpoints for quiz submission?
+4. Build the behavioral tracking system?

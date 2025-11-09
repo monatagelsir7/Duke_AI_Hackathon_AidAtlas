@@ -1,0 +1,1730 @@
+# Conflict Profile System - Content Pipeline & LLM Safety
+
+## 1. System Architecture Overview
+
+```
+[Trusted Data Sources] 
+        ↓
+[Web Scraping Layer]
+        ↓
+[Content Aggregation & Deduplication]
+        ↓
+[LLM Processing with Structured Output]
+        ↓
+[Fact-Checking & Validation Layer]
+        ↓
+[Admin Review Queue] ← NEW CONFLICTS REQUIRE APPROVAL
+        ↓
+[Published Conflict Profiles] → User-facing cards
+        ↓
+[Daily Update Cycle]
+```
+
+---
+
+## 2. Trusted Data Sources (Preventing Hallucinations)
+
+### Primary Strategy: START WITH VERIFIED SOURCES
+**Key Principle**: Don't let the LLM decide what's a conflict. Use authoritative sources that have already done the verification.
+
+### Tier 1: Authoritative Humanitarian Sources (Ground Truth)
+These organizations already verify conflicts before reporting:
+
+1. **UN OCHA ReliefWeb** (https://reliefweb.int/)
+   - API: https://api.reliefweb.int/v1/reports
+   - Pre-verified humanitarian crises
+   - Updates daily
+   - Structured data format
+
+2. **ACLED - Armed Conflict Location & Event Data** (https://acleddata.com/)
+   - API: Available with free research account
+   - Real-time conflict event tracking
+   - Geographic precision
+   - Academic-grade verification
+
+3. **ICRC - International Committee of the Red Cross** (https://www.icrc.org/)
+   - RSS feeds for conflict updates
+   - Only reports where they have ground presence
+   - Highly credible
+
+4. **UNHCR - Refugee Agency** (https://data.unhcr.org/)
+   - API: https://api.unhcr.org/
+   - Tracks displacement = indicator of conflict
+   - Population statistics
+
+5. **WHO Emergency Response** (https://www.who.int/emergencies)
+   - Health emergency declarations
+   - Often first to identify escalations
+
+6. **GDELT Project** (https://www.gdeltproject.org/)
+   - Global conflict event database
+   - 100M+ events tracked
+   - API available
+   - Requires filtering/validation
+
+### Tier 2: News Aggregators (Secondary Verification)
+Use for updates on existing conflicts only:
+
+- **Reuters API** (https://www.reuters.com/)
+- **AP News API** (https://developer.ap.org/)
+- **BBC News API**
+- **NewsAPI.org** (Aggregator)
+
+**Critical Rule**: News sources ALONE cannot trigger new conflict creation - they only update existing ones.
+
+---
+
+## 3. Data Scraping Infrastructure
+
+### Technology Stack
+
+```yaml
+Web Scraping:
+  - Framework: Scrapy (Python) - Most robust for complex scraping
+  - Alternative: Playwright (for JavaScript-heavy sites)
+  - Proxy Management: ScraperAPI or Bright Data (avoid IP bans)
+  - Scheduling: Apache Airflow (orchestrate daily runs)
+  
+Storage:
+  - Raw Data: AWS S3 or Google Cloud Storage
+  - Structured Data: PostgreSQL + Elasticsearch
+  - Cache: Redis (for recent articles)
+  
+Processing Queue:
+  - Message Broker: RabbitMQ or AWS SQS
+  - Workers: Celery (Python task queue)
+```
+
+### Implementation Example: Scraping UN OCHA ReliefWeb
+
+```python
+# scrapers/reliefweb_scraper.py
+import scrapy
+import requests
+from datetime import datetime, timedelta
+import json
+
+class ReliefWebScraper:
+    """
+    Scrape UN OCHA ReliefWeb for verified humanitarian crises
+    """
+    
+    BASE_URL = "https://api.reliefweb.int/v1/reports"
+    
+    def __init__(self):
+        self.session = requests.Session()
+    
+    def fetch_recent_reports(self, days_back=1):
+        """
+        Fetch reports from last N days
+        """
+        date_from = (datetime.now() - timedelta(days=days_back)).strftime('%Y-%m-%d')
+        
+        params = {
+            'appname': 'humanitarian-app',
+            'profile': 'full',
+            'preset': 'latest',
+            'slim': 0,
+            'query': {
+                'value': f'date.created:[{date_from} TO *]',
+                'operator': 'AND'
+            },
+            'filter': {
+                'field': 'primary_country.iso3',
+                'operator': 'AND'
+            },
+            'fields': {
+                'include': [
+                    'id',
+                    'title',
+                    'body',
+                    'date',
+                    'primary_country',
+                    'country',
+                    'disaster',
+                    'vulnerable_groups',
+                    'theme',
+                    'source',
+                    'url'
+                ]
+            },
+            'limit': 1000
+        }
+        
+        response = self.session.post(
+            self.BASE_URL,
+            json=params,
+            headers={'Content-Type': 'application/json'}
+        )
+        
+        if response.status_code == 200:
+            return response.json()['data']
+        else:
+            raise Exception(f"ReliefWeb API error: {response.status_code}")
+    
+    def extract_conflicts(self, reports):
+        """
+        Extract conflict information from reports
+        """
+        conflicts_by_country = {}
+        
+        for report in reports:
+            fields = report['fields']
+            
+            # Primary country affected
+            if 'primary_country' in fields:
+                country_data = fields['primary_country']
+                country_code = country_data['iso3']
+                country_name = country_data['name']
+                
+                if country_code not in conflicts_by_country:
+                    conflicts_by_country[country_code] = {
+                        'country_name': country_name,
+                        'country_code': country_code,
+                        'reports': [],
+                        'disasters': set(),
+                        'themes': set(),
+                        'vulnerable_groups': set(),
+                        'sources': set()
+                    }
+                
+                # Aggregate data
+                conflict = conflicts_by_country[country_code]
+                conflict['reports'].append({
+                    'title': fields.get('title'),
+                    'body': fields.get('body', ''),
+                    'url': fields.get('url'),
+                    'date': fields.get('date', {}).get('created'),
+                    'source': fields.get('source', [{}])[0].get('name', 'Unknown')
+                })
+                
+                # Extract structured metadata
+                if 'disaster' in fields:
+                    for disaster in fields['disaster']:
+                        conflict['disasters'].add(disaster['name'])
+                
+                if 'theme' in fields:
+                    for theme in fields['theme']:
+                        conflict['themes'].add(theme['name'])
+                
+                if 'vulnerable_groups' in fields:
+                    for group in fields['vulnerable_groups']:
+                        conflict['vulnerable_groups'].add(group['name'])
+        
+        # Convert sets to lists for JSON serialization
+        for conflict in conflicts_by_country.values():
+            conflict['disasters'] = list(conflict['disasters'])
+            conflict['themes'] = list(conflict['themes'])
+            conflict['vulnerable_groups'] = list(conflict['vulnerable_groups'])
+        
+        return conflicts_by_country
+
+
+# Example usage in Airflow DAG
+def scrape_reliefweb_task():
+    scraper = ReliefWebScraper()
+    reports = scraper.fetch_recent_reports(days_back=1)
+    conflicts = scraper.extract_conflicts(reports)
+    
+    # Store in database
+    store_scraped_data(conflicts, source='reliefweb')
+    
+    return conflicts
+```
+
+### Scraping ACLED (Conflict Events)
+
+```python
+# scrapers/acled_scraper.py
+import requests
+from datetime import datetime, timedelta
+
+class ACLEDScraper:
+    """
+    Scrape ACLED for real-time conflict events
+    Requires free API key: https://developer.acleddata.com/
+    """
+    
+    BASE_URL = "https://api.acleddata.com/acled/read"
+    
+    def __init__(self, api_key, email):
+        self.api_key = api_key
+        self.email = email
+    
+    def fetch_recent_events(self, days_back=7):
+        """
+        Fetch conflict events from last N days
+        """
+        date_from = (datetime.now() - timedelta(days=days_back)).strftime('%Y-%m-%d')
+        date_to = datetime.now().strftime('%Y-%m-%d')
+        
+        params = {
+            'key': self.api_key,
+            'email': self.email,
+            'event_date': f'{date_from}|{date_to}',
+            'event_date_where': 'BETWEEN',
+            'limit': 5000
+        }
+        
+        response = requests.get(self.BASE_URL, params=params)
+        
+        if response.status_code == 200:
+            return response.json()['data']
+        else:
+            raise Exception(f"ACLED API error: {response.status_code}")
+    
+    def identify_active_conflicts(self, events):
+        """
+        Identify countries with significant conflict activity
+        """
+        conflict_activity = {}
+        
+        for event in events:
+            country = event['country']
+            
+            if country not in conflict_activity:
+                conflict_activity[country] = {
+                    'country': country,
+                    'iso3': event['iso'],
+                    'event_count': 0,
+                    'fatalities': 0,
+                    'event_types': set(),
+                    'actors': set(),
+                    'locations': set()
+                }
+            
+            activity = conflict_activity[country]
+            activity['event_count'] += 1
+            activity['fatalities'] += int(event.get('fatalities', 0))
+            activity['event_types'].add(event['event_type'])
+            activity['actors'].add(event['actor1'])
+            activity['locations'].add(event['location'])
+        
+        # Convert sets to lists
+        for activity in conflict_activity.values():
+            activity['event_types'] = list(activity['event_types'])
+            activity['actors'] = list(activity['actors'])
+            activity['locations'] = list(activity['locations'])
+        
+        # Filter: Only return countries with significant activity
+        # Threshold: 10+ events OR 50+ fatalities in past 7 days
+        significant_conflicts = {
+            country: data 
+            for country, data in conflict_activity.items()
+            if data['event_count'] >= 10 or data['fatalities'] >= 50
+        }
+        
+        return significant_conflicts
+```
+
+---
+
+## 4. Content Aggregation & Deduplication
+
+### Combining Multiple Sources
+
+```python
+# pipeline/content_aggregator.py
+from datetime import datetime
+import hashlib
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+
+class ContentAggregator:
+    """
+    Aggregate content from multiple sources and deduplicate
+    """
+    
+    def __init__(self):
+        self.vectorizer = TfidfVectorizer(max_features=100)
+    
+    def merge_sources(self, reliefweb_data, acled_data, news_data):
+        """
+        Merge data from different sources
+        """
+        conflicts = {}
+        
+        # Start with authoritative sources
+        for country_code, data in reliefweb_data.items():
+            conflicts[country_code] = {
+                'country_code': country_code,
+                'country_name': data['country_name'],
+                'source_reliefweb': True,
+                'source_acled': False,
+                'verification_level': 'verified',  # ReliefWeb is pre-verified
+                'reports': data['reports'],
+                'metadata': {
+                    'disasters': data.get('disasters', []),
+                    'themes': data.get('themes', []),
+                    'vulnerable_groups': data.get('vulnerable_groups', [])
+                }
+            }
+        
+        # Add ACLED data (also verified)
+        for country, data in acled_data.items():
+            country_code = data['iso3']
+            
+            if country_code in conflicts:
+                conflicts[country_code]['source_acled'] = True
+                conflicts[country_code]['acled_data'] = {
+                    'event_count': data['event_count'],
+                    'fatalities': data['fatalities'],
+                    'event_types': data['event_types']
+                }
+            else:
+                # ACLED identifies new conflict - needs admin review
+                conflicts[country_code] = {
+                    'country_code': country_code,
+                    'country_name': country,
+                    'source_reliefweb': False,
+                    'source_acled': True,
+                    'verification_level': 'pending_review',  # Admin must approve
+                    'acled_data': {
+                        'event_count': data['event_count'],
+                        'fatalities': data['fatalities'],
+                        'event_types': data['event_types']
+                    }
+                }
+        
+        # News data ONLY updates existing conflicts
+        for article in news_data:
+            # Extract country from article (using NER or existing metadata)
+            country_code = self.extract_country(article)
+            
+            if country_code in conflicts:
+                # Only add to existing conflicts
+                if 'news_articles' not in conflicts[country_code]:
+                    conflicts[country_code]['news_articles'] = []
+                
+                conflicts[country_code]['news_articles'].append({
+                    'title': article['title'],
+                    'url': article['url'],
+                    'source': article['source'],
+                    'published': article['published_date']
+                })
+        
+        return conflicts
+    
+    def deduplicate_articles(self, articles):
+        """
+        Remove duplicate articles using TF-IDF similarity
+        """
+        if len(articles) < 2:
+            return articles
+        
+        # Extract text content
+        texts = [f"{a['title']} {a.get('body', '')}" for a in articles]
+        
+        # Calculate similarity matrix
+        tfidf_matrix = self.vectorizer.fit_transform(texts)
+        similarity_matrix = cosine_similarity(tfidf_matrix)
+        
+        # Keep only unique articles (similarity < 0.8)
+        unique_indices = []
+        seen = set()
+        
+        for i in range(len(articles)):
+            if i in seen:
+                continue
+            
+            unique_indices.append(i)
+            
+            # Mark similar articles as seen
+            for j in range(i + 1, len(articles)):
+                if similarity_matrix[i][j] > 0.8:
+                    seen.add(j)
+        
+        return [articles[i] for i in unique_indices]
+    
+    def extract_country(self, article):
+        """
+        Extract country code from article metadata or content
+        Uses spaCy NER as fallback
+        """
+        # Try metadata first
+        if 'country_code' in article:
+            return article['country_code']
+        
+        # Use NER as fallback (not shown for brevity)
+        # This would use spaCy or similar to extract location entities
+        return None
+```
+
+---
+
+## 5. LLM Processing with Structured Output (Preventing Hallucinations)
+
+### Key Strategy: Force Structured Responses + Explicit Source Citations
+
+```python
+# pipeline/llm_processor.py
+import anthropic
+import json
+
+class ConflictProfileGenerator:
+    """
+    Use Claude API to generate conflict profiles with strict validation
+    """
+    
+    def __init__(self, api_key):
+        self.client = anthropic.Anthropic(api_key=api_key)
+    
+    def generate_profile(self, conflict_data):
+        """
+        Generate conflict profile with structured output
+        """
+        
+        # Prepare source documents
+        source_documents = self._prepare_sources(conflict_data)
+        
+        # Construct prompt with strict instructions
+        prompt = f"""You are a humanitarian information analyst. Your task is to create a factual summary of a humanitarian crisis based ONLY on the provided verified sources.
+
+CRITICAL RULES:
+1. ONLY use information explicitly stated in the source documents below
+2. NEVER infer or assume information not in the sources
+3. If a source mentions Russia in the context of the Ukraine conflict, Russia is the AGGRESSOR, not the affected region
+4. The affected country is the one experiencing humanitarian crisis (displacement, casualties, infrastructure damage)
+5. You must cite which source each fact comes from
+6. If information is contradictory between sources, note this explicitly
+
+SOURCE DOCUMENTS:
+{json.dumps(source_documents, indent=2)}
+
+Generate a JSON response with this EXACT structure:
+{{
+  "affected_country": {{
+    "name": "Country name",
+    "country_code": "ISO3 code",
+    "confidence": "high/medium/low"
+  }},
+  "conflict_summary": {{
+    "title": "Brief conflict title (max 60 chars)",
+    "overview": "2-3 sentence summary of the humanitarian situation",
+    "start_date": "YYYY-MM-DD or 'ongoing' if unclear",
+    "current_status": "active/escalating/de-escalating/resolved"
+  }},
+  "humanitarian_impact": {{
+    "displaced_population": {{
+      "number": "Number or 'unknown'",
+      "source": "Which source this came from"
+    }},
+    "casualties": {{
+      "number": "Number or 'unknown'",
+      "source": "Which source this came from"
+    }},
+    "affected_groups": [
+      {{
+        "group": "children/women/elderly/refugees/etc",
+        "specific_impact": "How they're affected",
+        "urgency_level": "critical/high/moderate",
+        "source": "Which source"
+      }}
+    ]
+  }},
+  "key_needs": [
+    {{
+      "need": "food/water/shelter/medical/education/protection",
+      "urgency": "critical/high/moderate",
+      "source": "Which source"
+    }}
+  ],
+  "context": {{
+    "root_causes": ["Brief causes from sources only"],
+    "recent_developments": ["Recent events from sources only"]
+  }},
+  "verification": {{
+    "sources_used": ["List all sources used"],
+    "conflicting_information": "Any contradictions between sources",
+    "confidence_score": 0.0-1.0,
+    "reasoning": "Why this confidence score"
+  }}
+}}
+
+IMPORTANT: If you cannot extract this information confidently from the sources, set confidence to "low" and explain why in the reasoning field."""
+
+        # Call Claude API
+        response = self.client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=2000,
+            temperature=0.1,  # Low temperature for factual output
+            messages=[{
+                "role": "user",
+                "content": prompt
+            }]
+        )
+        
+        # Extract JSON from response
+        response_text = response.content[0].text
+        
+        # Parse JSON (with error handling)
+        try:
+            profile = json.loads(response_text)
+            return profile
+        except json.JSONDecodeError:
+            # Try to extract JSON from markdown code blocks
+            if "```json" in response_text:
+                json_text = response_text.split("```json")[1].split("```")[0].strip()
+                profile = json.loads(json_text)
+                return profile
+            else:
+                raise ValueError("LLM did not return valid JSON")
+    
+    def _prepare_sources(self, conflict_data):
+        """
+        Format source data for LLM consumption
+        """
+        sources = []
+        
+        # ReliefWeb reports
+        if 'reports' in conflict_data:
+            for i, report in enumerate(conflict_data['reports'][:5]):  # Limit to 5 most recent
+                sources.append({
+                    "source_id": f"reliefweb_{i}",
+                    "source_name": "UN OCHA ReliefWeb",
+                    "source_credibility": "verified_un_source",
+                    "title": report['title'],
+                    "date": report['date'],
+                    "content": report['body'][:1000],  # Truncate for token limits
+                    "url": report['url']
+                })
+        
+        # ACLED data
+        if 'acled_data' in conflict_data:
+            sources.append({
+                "source_id": "acled_1",
+                "source_name": "Armed Conflict Location & Event Data Project",
+                "source_credibility": "verified_academic_source",
+                "content": f"Conflict events in past 7 days: {conflict_data['acled_data']['event_count']}. "
+                          f"Fatalities: {conflict_data['acled_data']['fatalities']}. "
+                          f"Event types: {', '.join(conflict_data['acled_data']['event_types'])}"
+            })
+        
+        # News articles (for updates only)
+        if 'news_articles' in conflict_data:
+            for i, article in enumerate(conflict_data['news_articles'][:3]):
+                sources.append({
+                    "source_id": f"news_{i}",
+                    "source_name": article['source'],
+                    "source_credibility": "news_media",
+                    "title": article['title'],
+                    "url": article['url'],
+                    "date": article['published']
+                })
+        
+        return sources
+```
+
+### Example LLM Response (Structured JSON)
+
+```json
+{
+  "affected_country": {
+    "name": "Ukraine",
+    "country_code": "UKR",
+    "confidence": "high"
+  },
+  "conflict_summary": {
+    "title": "Ongoing Armed Conflict and Humanitarian Crisis",
+    "overview": "Large-scale armed conflict has resulted in significant civilian casualties, widespread displacement, and destruction of critical infrastructure. Humanitarian needs remain urgent across affected regions, with particular concerns for vulnerable populations.",
+    "start_date": "2022-02-24",
+    "current_status": "active"
+  },
+  "humanitarian_impact": {
+    "displaced_population": {
+      "number": "6.3 million internally displaced",
+      "source": "reliefweb_0"
+    },
+    "casualties": {
+      "number": "10,000+ civilian casualties confirmed",
+      "source": "reliefweb_1"
+    },
+    "affected_groups": [
+      {
+        "group": "children",
+        "specific_impact": "1,000+ education facilities damaged or destroyed, affecting access to schooling",
+        "urgency_level": "critical",
+        "source": "reliefweb_2"
+      },
+      {
+        "group": "elderly",
+        "specific_impact": "Limited mobility makes evacuation difficult, many isolated in conflict zones",
+        "urgency_level": "high",
+        "source": "reliefweb_0"
+      }
+    ]
+  },
+  "key_needs": [
+    {
+      "need": "shelter",
+      "urgency": "critical",
+      "source": "reliefweb_0"
+    },
+    {
+      "need": "medical",
+      "urgency": "critical",
+      "source": "reliefweb_1"
+    },
+    {
+      "need": "food",
+      "urgency": "high",
+      "source": "reliefweb_0"
+    }
+  ],
+  "context": {
+    "root_causes": ["Armed conflict beginning February 2022"],
+    "recent_developments": ["Ongoing military operations", "Winter weather increasing shelter needs"]
+  },
+  "verification": {
+    "sources_used": ["reliefweb_0", "reliefweb_1", "reliefweb_2", "acled_1"],
+    "conflicting_information": "None detected",
+    "confidence_score": 0.95,
+    "reasoning": "Multiple verified UN sources with consistent information. High confidence in affected country identification and humanitarian needs assessment."
+  }
+}
+```
+
+---
+
+## 6. Fact-Checking & Validation Layer
+
+### Multi-Step Validation Process
+
+```python
+# pipeline/validator.py
+import re
+from typing import Dict, List
+
+class ConflictValidator:
+    """
+    Validate LLM-generated profiles before admin review
+    """
+    
+    # Known aggressor patterns to catch misclassification
+    AGGRESSOR_KEYWORDS = [
+        'invasion', 'invaded', 'attacking', 'aggressor',
+        'military operation', 'launched attack'
+    ]
+    
+    def validate_profile(self, profile: Dict, raw_data: Dict) -> Dict:
+        """
+        Comprehensive validation of generated profile
+        Returns validation result with errors/warnings
+        """
+        validation_result = {
+            'is_valid': True,
+            'errors': [],
+            'warnings': [],
+            'confidence_adjustments': []
+        }
+        
+        # 1. Validate affected country identification
+        country_validation = self._validate_affected_country(profile, raw_data)
+        if not country_validation['valid']:
+            validation_result['errors'].extend(country_validation['errors'])
+            validation_result['is_valid'] = False
+        
+        # 2. Check for aggressor misclassification
+        aggressor_check = self._check_aggressor_misclassification(profile, raw_data)
+        if aggressor_check['potential_issue']:
+            validation_result['errors'].append(aggressor_check['message'])
+            validation_result['is_valid'] = False
+        
+        # 3. Validate source citations
+        citation_check = self._validate_citations(profile, raw_data)
+        if not citation_check['valid']:
+            validation_result['warnings'].extend(citation_check['warnings'])
+        
+        # 4. Check for hallucination indicators
+        hallucination_check = self._detect_hallucinations(profile, raw_data)
+        if hallucination_check['likely_hallucination']:
+            validation_result['errors'].append(hallucination_check['message'])
+            validation_result['is_valid'] = False
+        
+        # 5. Validate confidence scores
+        confidence_check = self._validate_confidence(profile)
+        if not confidence_check['valid']:
+            validation_result['warnings'].append(confidence_check['message'])
+        
+        return validation_result
+    
+    def _validate_affected_country(self, profile, raw_data):
+        """
+        Ensure the identified affected country matches source data
+        """
+        identified_country = profile['affected_country']['country_code']
+        
+        # Check against known affected countries in raw data
+        source_countries = set()
+        
+        if 'country_code' in raw_data:
+            source_countries.add(raw_data['country_code'])
+        
+        if 'reports' in raw_data:
+            for report in raw_data['reports']:
+                # Extract country from report metadata
+                pass  # Implementation depends on data structure
+        
+        if identified_country not in source_countries and source_countries:
+            return {
+                'valid': False,
+                'errors': [
+                    f"LLM identified {identified_country} as affected country, "
+                    f"but sources indicate: {', '.join(source_countries)}"
+                ]
+            }
+        
+        return {'valid': True, 'errors': []}
+    
+    def _check_aggressor_misclassification(self, profile, raw_data):
+        """
+        Detect if an aggressor nation is misclassified as affected country
+        
+        Example: Russia invading Ukraine -> Russia should NOT be the affected country
+        """
+        affected_country = profile['affected_country']['name'].lower()
+        overview = profile['conflict_summary']['overview'].lower()
+        
+        # Check if the affected country is mentioned as aggressor in the text
+        for keyword in self.AGGRESSOR_KEYWORDS:
+            if keyword in overview:
+                # Extract context around keyword
+                context = self._extract_context(overview, keyword, window=50)
+                
+                # Check if affected country is the subject of aggressor action
+                if affected_country in context.split(keyword)[0]:
+                    return {
+                        'potential_issue': True,
+                        'message': f"Potential misclassification: {affected_country} appears as aggressor in context: '{context}'"
+                    }
+        
+        return {'potential_issue': False}
+    
+    def _validate_citations(self, profile, raw_data):
+        """
+        Ensure all facts have valid source citations
+        """
+        warnings = []
+        
+        # Check humanitarian impact sources
+        if 'humanitarian_impact' in profile:
+            impact = profile['humanitarian_impact']
+            
+            if 'displaced_population' in impact:
+                if 'source' not in impact['displaced_population']:
+                    warnings.append("Displaced population number lacks source citation")
+            
+            if 'affected_groups' in impact:
+                for group in impact['affected_groups']:
+                    if 'source' not in group:
+                        warnings.append(f"Affected group '{group['group']}' lacks source citation")
+        
+        return {
+            'valid': len(warnings) == 0,
+            'warnings': warnings
+        }
+    
+    def _detect_hallucinations(self, profile, raw_data):
+        """
+        Detect potential LLM hallucinations
+        """
+        # Check for suspiciously specific numbers without sources
+        overview = profile['conflict_summary']['overview']
+        
+        # Look for numbers
+        numbers = re.findall(r'\d+(?:,\d+)*(?:\.\d+)?', overview)
+        
+        if len(numbers) > 2:
+            # Multiple specific numbers without citation = potential hallucination
+            return {
+                'likely_hallucination': True,
+                'message': "Overview contains multiple specific numbers but no inline citations"
+            }
+        
+        # Check for low confidence score
+        confidence = profile['verification']['confidence_score']
+        if confidence < 0.6:
+            return {
+                'likely_hallucination': True,
+                'message': f"Low confidence score ({confidence}) indicates potential unreliability"
+            }
+        
+        return {'likely_hallucination': False}
+    
+    def _validate_confidence(self, profile):
+        """
+        Ensure confidence scores are reasonable
+        """
+        confidence = profile['verification']['confidence_score']
+        
+        # Check if confidence matches the data quality indicators
+        sources_used = len(profile['verification']['sources_used'])
+        
+        if confidence > 0.9 and sources_used < 2:
+            return {
+                'valid': False,
+                'message': "Confidence score too high for limited source count"
+            }
+        
+        return {'valid': True}
+    
+    def _extract_context(self, text, keyword, window=50):
+        """
+        Extract context around a keyword
+        """
+        idx = text.find(keyword)
+        if idx == -1:
+            return ""
+        
+        start = max(0, idx - window)
+        end = min(len(text), idx + len(keyword) + window)
+        
+        return text[start:end]
+```
+
+---
+
+## 7. Admin Review Queue System
+
+### New Conflict Detection & Approval Workflow
+
+```python
+# admin/review_queue.py
+from enum import Enum
+from datetime import datetime
+
+class ConflictStatus(Enum):
+    PENDING_REVIEW = "pending_review"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    NEEDS_REVISION = "needs_revision"
+
+class AdminReviewQueue:
+    """
+    Manage admin review queue for new/updated conflicts
+    """
+    
+    def __init__(self, db_connection):
+        self.db = db_connection
+    
+    def add_to_review_queue(self, conflict_data, trigger_reason):
+        """
+        Add conflict to admin review queue
+        """
+        review_item = {
+            'conflict_id': conflict_data.get('id'),
+            'country_code': conflict_data['country_code'],
+            'country_name': conflict_data['country_name'],
+            'status': ConflictStatus.PENDING_REVIEW.value,
+            'trigger_reason': trigger_reason,  # 'new_conflict', 'major_update', 'low_confidence'
+            'llm_generated_profile': conflict_data['profile'],
+            'source_data': conflict_data['raw_sources'],
+            'validation_result': conflict_data['validation'],
+            'priority': self._calculate_priority(conflict_data, trigger_reason),
+            'created_at': datetime.now(),
+            'assigned_to': None
+        }
+        
+        # Insert into database
+        self.db.execute("""
+            INSERT INTO conflict_review_queue 
+            (conflict_id, country_code, status, trigger_reason, data, priority, created_at)
+            VALUES (%(conflict_id)s, %(country_code)s, %(status)s, %(trigger_reason)s, %(data)s, %(priority)s, %(created_at)s)
+        """, {
+            'conflict_id': review_item['conflict_id'],
+            'country_code': review_item['country_code'],
+            'status': review_item['status'],
+            'trigger_reason': review_item['trigger_reason'],
+            'data': json.dumps(review_item),
+            'priority': review_item['priority'],
+            'created_at': review_item['created_at']
+        })
+        
+        # Send notification to admin
+        self._notify_admin(review_item)
+        
+        return review_item
+    
+    def _calculate_priority(self, conflict_data, trigger_reason):
+        """
+        Calculate review priority (1=highest, 5=lowest)
+        """
+        if trigger_reason == 'new_conflict':
+            # New conflicts are high priority
+            base_priority = 1
+        elif trigger_reason == 'major_update':
+            base_priority = 2
+        elif trigger_reason == 'low_confidence':
+            base_priority = 3
+        else:
+            base_priority = 4
+        
+        # Adjust based on severity indicators
+        acled_data = conflict_data.get('acled_data', {})
+        if acled_data.get('fatalities', 0) > 100:
+            base_priority = max(1, base_priority - 1)
+        
+        return base_priority
+    
+    def _notify_admin(self, review_item):
+        """
+        Send notification to admin about new review item
+        """
+        # Email notification
+        send_email(
+            to=os.getenv('ADMIN_EMAIL'),
+            subject=f"New Conflict Requires Review: {review_item['country_name']}",
+            body=f"""
+            A new conflict has been detected and requires your review:
+            
+            Country: {review_item['country_name']}
+            Reason: {review_item['trigger_reason']}
+            Priority: {review_item['priority']}
+            
+            Review at: {os.getenv('ADMIN_DASHBOARD_URL')}/review/{review_item['conflict_id']}
+            """
+        )
+        
+        # Slack/Discord notification (optional)
+        send_slack_notification(
+            channel='#conflict-reviews',
+            message=f"🚨 New conflict for review: {review_item['country_name']} ({review_item['trigger_reason']})"
+        )
+    
+    def get_pending_reviews(self, limit=50):
+        """
+        Get all pending review items, ordered by priority
+        """
+        result = self.db.execute("""
+            SELECT * FROM conflict_review_queue
+            WHERE status = 'pending_review'
+            ORDER BY priority ASC, created_at ASC
+            LIMIT %s
+        """, (limit,))
+        
+        return [json.loads(row['data']) for row in result]
+    
+    def approve_conflict(self, conflict_id, admin_id, edits=None):
+        """
+        Admin approves conflict for publication
+        """
+        # Get review item
+        review_item = self._get_review_item(conflict_id)
+        
+        # Apply admin edits if provided
+        if edits:
+            review_item['llm_generated_profile'] = self._apply_edits(
+                review_item['llm_generated_profile'],
+                edits
+            )
+        
+        # Update status
+        self.db.execute("""
+            UPDATE conflict_review_queue
+            SET status = 'approved', reviewed_by = %s, reviewed_at = %s
+            WHERE conflict_id = %s
+        """, (admin_id, datetime.now(), conflict_id))
+        
+        # Publish conflict
+        self._publish_conflict(review_item)
+        
+        # Log approval
+        self._log_admin_action(conflict_id, admin_id, 'approved', edits)
+    
+    def reject_conflict(self, conflict_id, admin_id, reason):
+        """
+        Admin rejects conflict (false positive detection)
+        """
+        self.db.execute("""
+            UPDATE conflict_review_queue
+            SET status = 'rejected', reviewed_by = %s, reviewed_at = %s, rejection_reason = %s
+            WHERE conflict_id = %s
+        """, (admin_id, datetime.now(), reason, conflict_id))
+        
+        # Add to blacklist to prevent re-detection
+        self._add_to_blacklist(conflict_id, reason)
+        
+        # Log rejection
+        self._log_admin_action(conflict_id, admin_id, 'rejected', {'reason': reason})
+    
+    def request_revision(self, conflict_id, admin_id, revision_notes):
+        """
+        Admin requests LLM to regenerate with specific instructions
+        """
+        review_item = self._get_review_item(conflict_id)
+        
+        # Regenerate with admin feedback
+        revised_profile = self._regenerate_with_feedback(
+            review_item,
+            revision_notes
+        )
+        
+        # Update review item
+        self.db.execute("""
+            UPDATE conflict_review_queue
+            SET data = %s, status = 'pending_review'
+            WHERE conflict_id = %s
+        """, (json.dumps({'llm_generated_profile': revised_profile}), conflict_id))
+        
+        self._log_admin_action(conflict_id, admin_id, 'requested_revision', revision_notes)
+    
+    def _publish_conflict(self, review_item):
+        """
+        Publish approved conflict to production database
+        """
+        profile = review_item['llm_generated_profile']
+        
+        self.db.execute("""
+            INSERT INTO conflicts 
+            (country_code, country_name, title, summary, affected_groups, 
+             key_needs, status, verification_level, created_at, last_updated)
+            VALUES (%(country_code)s, %(country_name)s, %(title)s, %(summary)s, 
+                    %(affected_groups)s, %(key_needs)s, %(status)s, %(verification)s, 
+                    NOW(), NOW())
+            ON CONFLICT (country_code) DO UPDATE SET
+                title = EXCLUDED.title,
+                summary = EXCLUDED.summary,
+                last_updated = NOW()
+        """, {
+            'country_code': review_item['country_code'],
+            'country_name': review_item['country_name'],
+            'title': profile['conflict_summary']['title'],
+            'summary': profile['conflict_summary']['overview'],
+            'affected_groups': json.dumps(profile['humanitarian_impact']['affected_groups']),
+            'key_needs': json.dumps(profile['key_needs']),
+            'status': profile['conflict_summary']['current_status'],
+            'verification': 'admin_verified'
+        })
+```
+
+---
+
+## 8. Database Schema for Conflict Profiles
+
+```sql
+-- Main conflicts table (approved/published conflicts)
+CREATE TABLE conflicts (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    country_code VARCHAR(3) NOT NULL UNIQUE,
+    country_name VARCHAR(100) NOT NULL,
+    
+    -- Basic info
+    title VARCHAR(200) NOT NULL,
+    summary TEXT NOT NULL,
+    start_date DATE,
+    current_status VARCHAR(50), -- active, escalating, de-escalating, resolved
+    
+    -- Humanitarian data
+    affected_groups JSONB, -- [{group, impact, urgency}, ...]
+    key_needs JSONB, -- [{need, urgency}, ...]
+    displaced_population INTEGER,
+    estimated_casualties INTEGER,
+    
+    -- Verification
+    verification_level VARCHAR(50) DEFAULT 'admin_verified',
+    confidence_score DECIMAL(3,2),
+    
+    -- Media
+    hero_image_url TEXT,
+    media_urls JSONB,
+    
+    -- Metadata
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    data_sources JSONB, -- List of sources used
+    
+    -- Visibility
+    is_active BOOLEAN DEFAULT true,
+    is_featured BOOLEAN DEFAULT false
+);
+
+-- Admin review queue
+CREATE TABLE conflict_review_queue (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    conflict_id UUID REFERENCES conflicts(id) ON DELETE CASCADE,
+    country_code VARCHAR(3) NOT NULL,
+    
+    -- Status
+    status VARCHAR(50) NOT NULL, -- pending_review, approved, rejected, needs_revision
+    trigger_reason VARCHAR(100), -- new_conflict, major_update, low_confidence
+    priority INTEGER, -- 1-5, 1 = highest
+    
+    -- Data
+    data JSONB NOT NULL, -- Full review item including LLM output and sources
+    
+    -- Admin actions
+    reviewed_by UUID REFERENCES admin_users(id),
+    reviewed_at TIMESTAMP,
+    rejection_reason TEXT,
+    admin_notes TEXT,
+    
+    -- Metadata
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Conflict update history (track all changes)
+CREATE TABLE conflict_update_history (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    conflict_id UUID REFERENCES conflicts(id) ON DELETE CASCADE,
+    
+    -- What changed
+    update_type VARCHAR(50), -- daily_update, major_event, status_change
+    changes JSONB, -- Detailed diff of what changed
+    
+    -- Source
+    source VARCHAR(50), -- llm_automated, admin_manual
+    updated_by UUID REFERENCES admin_users(id),
+    
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Organizations working in each conflict
+CREATE TABLE conflict_organizations (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    conflict_id UUID REFERENCES conflicts(id) ON DELETE CASCADE,
+    organization_id UUID REFERENCES organizations(id) ON DELETE CASCADE,
+    
+    -- Specific to this conflict
+    target_groups TEXT[], -- Which groups they're helping
+    intervention_type TEXT[], -- food, medical, shelter, etc.
+    urgency_score DECIMAL(3,2),
+    
+    -- Verification
+    verified BOOLEAN DEFAULT false,
+    verification_date DATE,
+    
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    
+    UNIQUE(conflict_id, organization_id)
+);
+
+-- Blacklist for false positives
+CREATE TABLE conflict_detection_blacklist (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    country_code VARCHAR(3),
+    reason TEXT,
+    added_by UUID REFERENCES admin_users(id),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Raw scraped data (for audit trail)
+CREATE TABLE scraped_data_archive (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    source VARCHAR(50), -- reliefweb, acled, news
+    country_code VARCHAR(3),
+    raw_data JSONB,
+    scraped_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_conflicts_country_code ON conflicts(country_code);
+CREATE INDEX idx_conflicts_status ON conflicts(current_status);
+CREATE INDEX idx_review_queue_status ON conflict_review_queue(status, priority);
+CREATE INDEX idx_update_history_conflict ON conflict_update_history(conflict_id);
+```
+
+---
+
+## 9. Admin Dashboard (Frontend)
+
+### React Admin Panel for Conflict Review
+
+```javascript
+// admin/ConflictReviewDashboard.jsx
+import React, { useState, useEffect } from 'react';
+import { Card, Button, Badge, Tabs, Alert } from 'react-bootstrap';
+
+export default function ConflictReviewDashboard() {
+  const [pendingReviews, setPendingReviews] = useState([]);
+  const [selectedReview, setSelectedReview] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetchPendingReviews();
+  }, []);
+
+  const fetchPendingReviews = async () => {
+    const response = await fetch('/api/admin/review-queue');
+    const data = await response.json();
+    setPendingReviews(data.reviews);
+    setLoading(false);
+  };
+
+  const handleApprove = async (conflictId, edits) => {
+    await fetch(`/api/admin/conflicts/${conflictId}/approve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ edits })
+    });
+    
+    fetchPendingReviews();
+    setSelectedReview(null);
+  };
+
+  const handleReject = async (conflictId, reason) => {
+    await fetch(`/api/admin/conflicts/${conflictId}/reject`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason })
+    });
+    
+    fetchPendingReviews();
+    setSelectedReview(null);
+  };
+
+  return (
+    <div className="container mt-4">
+      <h1>Conflict Review Queue</h1>
+      <p className="text-muted">
+        {pendingReviews.length} conflict(s) awaiting review
+      </p>
+
+      <div className="row">
+        {/* Review Queue List */}
+        <div className="col-md-4">
+          {pendingReviews.map(review => (
+            <Card 
+              key={review.conflict_id} 
+              className="mb-3"
+              onClick={() => setSelectedReview(review)}
+              style={{ cursor: 'pointer' }}
+            >
+              <Card.Body>
+                <div className="d-flex justify-content-between">
+                  <h5>{review.country_name}</h5>
+                  <Badge bg={getPriorityColor(review.priority)}>
+                    P{review.priority}
+                  </Badge>
+                </div>
+                <p className="text-muted mb-1">
+                  <small>{review.trigger_reason.replace('_', ' ')}</small>
+                </p>
+                <p className="text-muted mb-0">
+                  <small>{new Date(review.created_at).toLocaleDateString()}</small>
+                </p>
+              </Card.Body>
+            </Card>
+          ))}
+        </div>
+
+        {/* Review Details */}
+        <div className="col-md-8">
+          {selectedReview ? (
+            <ConflictReviewDetail
+              review={selectedReview}
+              onApprove={handleApprove}
+              onReject={handleReject}
+            />
+          ) : (
+            <Alert variant="info">
+              Select a conflict from the list to review
+            </Alert>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ConflictReviewDetail({ review, onApprove, onReject }) {
+  const [edits, setEdits] = useState({});
+  const [rejectReason, setRejectReason] = useState('');
+  const [showRejectModal, setShowRejectModal] = useState(false);
+
+  const profile = review.llm_generated_profile;
+  const validation = review.validation_result;
+
+  return (
+    <Card>
+      <Card.Header>
+        <h3>{profile.conflict_summary.title}</h3>
+        <Badge bg={validation.is_valid ? 'success' : 'warning'}>
+          {validation.is_valid ? 'Validation Passed' : 'Validation Issues'}
+        </Badge>
+      </Card.Header>
+      
+      <Card.Body>
+        <Tabs defaultActiveKey="summary">
+          {/* Summary Tab */}
+          <Tab eventKey="summary" title="Summary">
+            <div className="mt-3">
+              <h5>Overview</h5>
+              <p>{profile.conflict_summary.overview}</p>
+              
+              <h5>Affected Country</h5>
+              <p>
+                {profile.affected_country.name} ({profile.affected_country.country_code})
+                <Badge className="ms-2">
+                  Confidence: {profile.affected_country.confidence}
+                </Badge>
+              </p>
+
+              <h5>Status</h5>
+              <p>{profile.conflict_summary.current_status}</p>
+            </div>
+          </Tab>
+
+          {/* Humanitarian Impact Tab */}
+          <Tab eventKey="impact" title="Humanitarian Impact">
+            <div className="mt-3">
+              <h5>Displaced Population</h5>
+              <p>
+                {profile.humanitarian_impact.displaced_population.number}
+                <br/>
+                <small className="text-muted">
+                  Source: {profile.humanitarian_impact.displaced_population.source}
+                </small>
+              </p>
+
+              <h5>Affected Groups</h5>
+              {profile.humanitarian_impact.affected_groups.map((group, i) => (
+                <Card key={i} className="mb-2">
+                  <Card.Body>
+                    <h6>{group.group}</h6>
+                    <p>{group.specific_impact}</p>
+                    <Badge bg={getUrgencyColor(group.urgency_level)}>
+                      {group.urgency_level}
+                    </Badge>
+                    <br/>
+                    <small className="text-muted">Source: {group.source}</small>
+                  </Card.Body>
+                </Card>
+              ))}
+            </div>
+          </Tab>
+
+          {/* Sources Tab */}
+          <Tab eventKey="sources" title="Sources">
+            <div className="mt-3">
+              <h5>Sources Used</h5>
+              <ul>
+                {profile.verification.sources_used.map((source, i) => (
+                  <li key={i}>{source}</li>
+                ))}
+              </ul>
+
+              <h5>Confidence Score</h5>
+              <p>{profile.verification.confidence_score}</p>
+              <p className="text-muted">{profile.verification.reasoning}</p>
+            </div>
+          </Tab>
+
+          {/* Validation Tab */}
+          <Tab eventKey="validation" title="Validation">
+            <div className="mt-3">
+              {validation.errors.length > 0 && (
+                <>
+                  <h5 className="text-danger">Errors</h5>
+                  {validation.errors.map((error, i) => (
+                    <Alert key={i} variant="danger">{error}</Alert>
+                  ))}
+                </>
+              )}
+
+              {validation.warnings.length > 0 && (
+                <>
+                  <h5 className="text-warning">Warnings</h5>
+                  {validation.warnings.map((warning, i) => (
+                    <Alert key={i} variant="warning">{warning}</Alert>
+                  ))}
+                </>
+              )}
+
+              {validation.is_valid && (
+                <Alert variant="success">All validation checks passed!</Alert>
+              )}
+            </div>
+          </Tab>
+
+          {/* Raw Data Tab */}
+          <Tab eventKey="raw" title="Raw Data">
+            <pre className="mt-3">
+              {JSON.stringify(review.source_data, null, 2)}
+            </pre>
+          </Tab>
+        </Tabs>
+
+        {/* Action Buttons */}
+        <div className="mt-4 d-flex gap-2">
+          <Button 
+            variant="success" 
+            onClick={() => onApprove(review.conflict_id, edits)}
+          >
+            Approve & Publish
+          </Button>
+          
+          <Button 
+            variant="danger" 
+            onClick={() => setShowRejectModal(true)}
+          >
+            Reject
+          </Button>
+          
+          <Button variant="warning">
+            Request Revision
+          </Button>
+        </div>
+      </Card.Body>
+    </Card>
+  );
+}
+
+function getPriorityColor(priority) {
+  if (priority === 1) return 'danger';
+  if (priority === 2) return 'warning';
+  return 'secondary';
+}
+
+function getUrgencyColor(urgency) {
+  if (urgency === 'critical') return 'danger';
+  if (urgency === 'high') return 'warning';
+  return 'info';
+}
+```
+
+---
+
+## 10. Daily Update Cycle (Automated)
+
+### Airflow DAG for Daily Processing
+
+```python
+# airflow/dags/daily_conflict_update.py
+from airflow import DAG
+from airflow.operators.python import PythonOperator
+from datetime import datetime, timedelta
+
+default_args = {
+    'owner': 'humanitarian-app',
+    'depends_on_past': False,
+    'start_date': datetime(2024, 1, 1),
+    'email_on_failure': True,
+    'email': ['admin@humanitarian-app.com'],
+    'retries': 2,
+    'retry_delay': timedelta(minutes=5),
+}
+
+dag = DAG(
+    'daily_conflict_update',
+    default_args=default_args,
+    description='Daily update of conflict profiles',
+    schedule_interval='0 6 * * *',  # 6 AM UTC daily
+    catchup=False
+)
+
+# Task 1: Scrape all sources
+scrape_reliefweb = PythonOperator(
+    task_id='scrape_reliefweb',
+    python_callable=scrape_reliefweb_task,
+    dag=dag
+)
+
+scrape_acled = PythonOperator(
+    task_id='scrape_acled',
+    python_callable=scrape_acled_task,
+    dag=dag
+)
+
+scrape_news = PythonOperator(
+    task_id='scrape_news',
+    python_callable=scrape_news_sources_task,
+    dag=dag
+)
+
+# Task 2: Aggregate and deduplicate
+aggregate_data = PythonOperator(
+    task_id='aggregate_data',
+    python_callable=aggregate_all_sources,
+    dag=dag
+)
+
+# Task 3: Process with LLM (existing conflicts only)
+update_existing_conflicts = PythonOperator(
+    task_id='update_existing_conflicts',
+    python_callable=update_existing_conflicts_task,
+    dag=dag
+)
+
+# Task 4: Detect new conflicts
+detect_new_conflicts = PythonOperator(
+    task_id='detect_new_conflicts',
+    python_callable=detect_new_conflicts_task,
+    dag=dag
+)
+
+# Task 5: Add new conflicts to review queue
+queue_new_conflicts = PythonOperator(
+    task_id='queue_new_conflicts',
+    python_callable=add_to_review_queue_task,
+    dag=dag
+)
+
+# Task 6: Validate all updates
+validate_updates = PythonOperator(
+    task_id='validate_updates',
+    python_callable=validate_all_updates_task,
+    dag=dag
+)
+
+# Task 7: Publish approved updates
+publish_updates = PythonOperator(
+    task_id='publish_updates',
+    python_callable=publish_approved_updates_task,
+    dag=dag
+)
+
+# Define task dependencies
+[scrape_reliefweb, scrape_acled, scrape_news] >> aggregate_data
+aggregate_data >> [update_existing_conflicts, detect_new_conflicts]
+update_existing_conflicts >> validate_updates >> publish_updates
+detect_new_conflicts >> queue_new_conflicts
+
+
+def update_existing_conflicts_task():
+    """
+    Update existing approved conflicts with new data
+    """
+    existing_conflicts = get_all_active_conflicts()
+    new_data = get_aggregated_data_from_cache()
+    
+    for conflict in existing_conflicts:
+        country_code = conflict['country_code']
+        
+        if country_code in new_data:
+            # Generate updated profile
+            updated_profile = generate_conflict_profile(new_data[country_code])
+            
+            # Compare with existing - only update if significant changes
+            if has_significant_changes(conflict, updated_profile):
+                # Auto-publish for existing conflicts (already admin-verified)
+                update_conflict_profile(conflict['id'], updated_profile)
+                
+                # Log update
+                log_conflict_update(conflict['id'], 'daily_automated_update')
+
+
+def detect_new_conflicts_task():
+    """
+    Detect NEW conflicts that don't exist in database yet
+    """
+    new_data = get_aggregated_data_from_cache()
+    existing_country_codes = get_existing_conflict_country_codes()
+    
+    new_conflicts = []
+    
+    for country_code, data in new_data.items():
+        if country_code not in existing_country_codes:
+            # Check if meets threshold for review
+            if meets_conflict_threshold(data):
+                # Generate profile
+                profile = generate_conflict_profile(data)
+                
+                # Validate
+                validation = validate_profile(profile, data)
+                
+                new_conflicts.append({
+                    'country_code': country_code,
+                    'profile': profile,
+                    'validation': validation,
+                    'raw_data': data
+                })
+    
+    # Store for next task
+    cache_new_conflicts(new_conflicts)
+    
+    return len(new_conflicts)
+
+
+def meets_conflict_threshold(data):
+    """
+    Determine if data represents actual conflict requiring review
+    """
+    # Must have data from authoritative sources
+    if not (data.get('source_reliefweb') or data.get('source_acled')):
+        return False
+    
+    # ACLED threshold: 10+ events OR 50+ fatalities in 7 days
+    if 'acled_data' in data:
+        events = data['acled_data'].get('event_count', 0)
+        fatalities = data['acled_data'].get('fatalities', 0)
+        
+        if events >= 10 or fatalities >= 50:
+            return True
+    
+    # ReliefWeb threshold: 3+ recent reports
+    if 'reports' in data and len(data['reports']) >= 3:
+        return True
+    
+    return False
+```
+
+---
+
+## 11. Best Practices Summary
+
+### Preventing LLM Hallucinations
+
+1. **✅ Start with verified sources** - Don't let LLM decide what's a conflict
+2. **✅ Use structured output** - Force JSON schema compliance
+3. **✅ Require source citations** - Every fact must reference a source
+4. **✅ Low temperature** - Use 0.1-0.2 for factual content
+5. **✅ Explicit instructions** - "ONLY use information from sources provided"
+6. **✅ Multi-layer validation** - Automated checks before human review
+7. **✅ Admin approval for new conflicts** - Human-in-the-loop for critical decisions
+
+### Preventing Aggressor Misclassification
+
+1. **✅ Context analysis** - Check if country appears as aggressor in text
+2. **✅ Keyword detection** - Flag terms like "invasion", "attacked", etc.
+3. **✅ Cross-reference with ACLED** - They classify actors clearly
+4. **✅ Admin review** - All new conflicts require human verification
+
+### Ensuring Freshness
+
+1. **✅ Daily automated updates** - Existing conflicts update automatically
+2. **✅ Real-time detection** - New conflicts flagged within 24 hours
+3. **✅ Admin notifications** - Instant alerts for high-priority reviews
+4. **✅ Update history** - Track all changes over time
+
+---
+
+## 12. Implementation Checklist
+
+### Phase 1: Foundation (Week 1-2)
+- [ ] Set up Scrapy project
+- [ ] Integrate ReliefWeb API
+- [ ] Integrate ACLED API
+- [ ] Set up PostgreSQL schema
+- [ ] Build content aggregation pipeline
+
+### Phase 2: LLM Integration (Week 3-4)
+- [ ] Implement Claude API integration
+- [ ] Build structured prompt system
+- [ ] Create validation layer
+- [ ] Test on sample conflicts
+
+### Phase 3: Admin System (Week 5-6)
+- [ ] Build review queue database
+- [ ] Create admin dashboard UI
+- [ ] Implement approval/rejection workflow
+- [ ] Add notification system
+
+### Phase 4: Automation (Week 7-8)
+- [ ] Set up Airflow
+- [ ] Create daily update DAG
+- [ ] Implement auto-publishing for updates
+- [ ] Add monitoring and alerts
+
+### Phase 5: Testing & Refinement (Week 9-10)
+- [ ] Test with 10-20 real conflicts
+- [ ] Measure validation accuracy
+- [ ] Refine thresholds
+- [ ] Train admin team
+
+---
+
+Would you like me to:
+1. **Build the web scraping code** for specific sources?
+2. **Create the LLM prompt templates** with examples?
+3. **Design the admin dashboard UI** in detail?
+4. **Write the API endpoints** for the admin review system?
+5. **Set up the Airflow DAG** configuration?

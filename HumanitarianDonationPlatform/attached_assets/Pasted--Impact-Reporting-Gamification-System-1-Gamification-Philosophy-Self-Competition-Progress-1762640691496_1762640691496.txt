@@ -1,0 +1,1051 @@
+# Impact Reporting & Gamification System
+
+## 1. Gamification Philosophy: Self-Competition & Progress
+
+### Core Principles
+```yaml
+Philosophy: "Compete with your past self, not others"
+
+Key Motivators:
+  - Personal growth tracking
+  - Milestone achievements
+  - Streak maintenance
+  - Impact visualization
+  - Habit formation
+  - Emotional rewards (feel-good factor)
+
+Avoid:
+  - Public leaderboards (discouraging for small donors)
+  - Donation amount comparisons between users
+  - Guilt-based messaging
+  - Pressure tactics
+```
+
+---
+
+## 2. Gamification Elements
+
+### 2.1 Progress Tracking Systems
+
+#### Personal Milestones
+```javascript
+MILESTONES = {
+  first_steps: {
+    name: "First Steps",
+    levels: [
+      { donations: 1, reward: "First Donation Badge", icon: "🌱" },
+      { donations: 5, reward: "Consistent Supporter", icon: "🌿" },
+      { donations: 10, reward: "Committed Helper", icon: "🌳" },
+      { donations: 25, reward: "Change Maker", icon: "🌲" },
+      { donations: 50, reward: "Impact Champion", icon: "🌴" },
+      { donations: 100, reward: "Humanitarian Hero", icon: "🏆" }
+    ]
+  },
+  
+  monthly_totals: {
+    name: "Monthly Impact",
+    levels: [
+      { amount: 10, reward: "Starter", color: "#95A5A6" },
+      { amount: 25, reward: "Helper", color: "#3498DB" },
+      { amount: 50, reward: "Supporter", color: "#9B59B6" },
+      { amount: 100, reward: "Champion", color: "#E74C3C" },
+      { amount: 250, reward: "Hero", color: "#F39C12" },
+      { amount: 500, reward: "Legend", color: "#FFD700" }
+    ]
+  },
+  
+  donation_streaks: {
+    name: "Consistency Streak",
+    levels: [
+      { months: 2, reward: "Building Momentum", icon: "🔥" },
+      { months: 3, reward: "On Fire!", icon: "🔥🔥" },
+      { months: 6, reward: "Half Year Hero", icon: "⭐" },
+      { months: 12, reward: "Year Champion", icon: "💫" },
+      { months: 24, reward: "Two Year Titan", icon: "🌟" }
+    ]
+  },
+  
+  countries_supported: {
+    name: "Global Impact",
+    levels: [
+      { countries: 1, reward: "Local Hero" },
+      { countries: 3, reward: "Regional Helper" },
+      { countries: 5, reward: "International Supporter" },
+      { countries: 10, reward: "Global Citizen" },
+      { countries: 20, reward: "World Changer" }
+    ]
+  },
+  
+  causes_supported: {
+    name: "Diverse Impact",
+    levels: [
+      { causes: 2, reward: "Focused Helper" },
+      { causes: 4, reward: "Multi-Cause Supporter" },
+      { causes: 6, reward: "Humanitarian Generalist" },
+      { causes: 8, reward: "Universal Supporter" }
+    ]
+  }
+};
+```
+
+#### Personal Growth Metrics
+```javascript
+GROWTH_METRICS = {
+  month_over_month: "Compare current month to last month",
+  year_over_year: "This month vs same month last year",
+  best_month: "Personal best donation month",
+  longest_streak: "Longest consecutive donation streak",
+  average_per_month: "Your average monthly impact",
+  total_lifetime: "Total impact since joining"
+};
+```
+
+### 2.2 Streak System
+
+**Why Streaks Work:**
+- Creates habit formation
+- Fear of breaking streak (loss aversion)
+- Visible progress
+- Daily/monthly engagement
+
+**Implementation:**
+```javascript
+class StreakSystem {
+  calculateStreak(userId) {
+    // Get all donation months
+    const donations = getDonationsByMonth(userId);
+    
+    let currentStreak = 0;
+    let longestStreak = 0;
+    let tempStreak = 0;
+    
+    // Start from most recent month
+    const today = new Date();
+    let checkDate = new Date(today.getFullYear(), today.getMonth(), 1);
+    
+    // Count backwards
+    while (checkDate >= userJoinDate) {
+      const monthKey = `${checkDate.getFullYear()}-${checkDate.getMonth()}`;
+      
+      if (donations[monthKey]) {
+        tempStreak++;
+        if (checkDate.getMonth() === today.getMonth()) {
+          currentStreak = tempStreak;
+        }
+      } else {
+        if (tempStreak > longestStreak) {
+          longestStreak = tempStreak;
+        }
+        tempStreak = 0;
+      }
+      
+      checkDate.setMonth(checkDate.getMonth() - 1);
+    }
+    
+    return {
+      current: currentStreak,
+      longest: Math.max(longestStreak, tempStreak),
+      isActive: currentStreak > 0,
+      nextMilestone: getNextStreakMilestone(currentStreak)
+    };
+  }
+  
+  getStreakEmoji(months) {
+    if (months >= 12) return "💫";
+    if (months >= 6) return "⭐";
+    if (months >= 3) return "🔥🔥";
+    if (months >= 2) return "🔥";
+    return "🌱";
+  }
+}
+```
+
+### 2.3 Challenge System (Monthly)
+
+**Personal Challenges (opt-in):**
+```javascript
+MONTHLY_CHALLENGES = {
+  consistency: {
+    name: "Stay Consistent",
+    description: "Donate at least once this month",
+    reward: "100 impact points",
+    type: "binary"
+  },
+  
+  increase_amount: {
+    name: "Level Up",
+    description: "Donate 10% more than last month",
+    reward: "Streak Saver token (forgives one missed month)",
+    type: "percentage"
+  },
+  
+  new_country: {
+    name: "Expand Horizons",
+    description: "Support a new country this month",
+    reward: "Explorer Badge",
+    type: "discovery"
+  },
+  
+  recurring_setup: {
+    name: "Go Recurring",
+    description: "Set up a monthly recurring donation",
+    reward: "500 impact points + Steady Supporter Badge",
+    type: "action"
+  },
+  
+  share_impact: {
+    name: "Inspire Others",
+    description: "Share your impact story on social media",
+    reward: "Influencer Badge",
+    type: "social"
+  },
+  
+  take_action: {
+    name: "Beyond Donations",
+    description: "Sign a petition or attend a protest",
+    reward: "Activist Badge",
+    type: "engagement"
+  }
+};
+```
+
+### 2.4 Impact Points System
+
+**Purpose:** Quantify non-monetary contributions
+
+```javascript
+POINTS_EARNING = {
+  // Donations
+  donation_1_25: 10,
+  donation_25_50: 25,
+  donation_50_100: 50,
+  donation_100_plus: (amount) => amount * 0.5,
+  recurring_setup: 200,
+  
+  // Engagement
+  profile_view: 1,
+  swipe_up: 2,
+  share_conflict: 10,
+  share_impact: 15,
+  
+  // Actions
+  sign_petition: 25,
+  attend_protest: 50,
+  contact_representative: 30,
+  
+  // Social
+  invite_friend: 100,
+  friend_donates: 250,
+  
+  // Streaks
+  streak_month: 50,
+  streak_bonus_3months: 150,
+  streak_bonus_6months: 500,
+  streak_bonus_12months: 1500,
+  
+  // Learning
+  read_article: 5,
+  watch_video: 10,
+  complete_quiz: 20
+};
+
+POINTS_REDEMPTION = {
+  streak_saver: 500, // Forgive one missed month
+  impact_boost: 200, // 2x points next week
+  priority_matching: 300, // Get first access to urgent conflicts
+  custom_badge: 1000, // Design your own badge
+  donor_spotlight: 2000 // Featured in monthly newsletter
+};
+```
+
+---
+
+## 3. Technology Stack
+
+### 3.1 Data Visualization
+
+```yaml
+Primary Library: React Native Skia (RECOMMENDED)
+  - Native performance (60fps+)
+  - Beautiful animations
+  - Custom charts/graphics
+  - GPU-accelerated
+  Package: @shopify/react-native-skia
+
+Alternative: Victory Native
+  - Pre-built chart components
+  - Easier to use
+  - Good for standard charts
+  Package: victory-native
+
+For Web Dashboard: D3.js + Recharts
+  - D3 for custom visualizations
+  - Recharts for standard charts
+  - Excellent documentation
+
+Animation Library: React Native Reanimated 3
+  - Smooth 60fps animations
+  - Gesture-based interactions
+  - Worklet support
+  Package: react-native-reanimated
+
+Progress Indicators: React Native Progress
+  - Circles, bars, pies
+  - Animated
+  Package: react-native-progress
+
+Confetti/Celebrations: React Native Confetti Cannon
+  - For milestone achievements
+  Package: react-native-confetti-cannon
+
+Lottie Animations: @lottiefiles/react-native
+  - Pre-made celebration animations
+  - Small file size
+```
+
+### 3.2 Backend
+
+```yaml
+Data Processing:
+  - Node.js + Express (API)
+  - PostgreSQL (data storage)
+  - Redis (caching, real-time updates)
+  
+Analytics:
+  - Mixpanel or Amplitude (user behavior)
+  - Custom analytics pipeline
+  
+Report Generation:
+  - Bull (job queue)
+  - node-cron (scheduling)
+  - Sharp (image generation for shares)
+  
+Push Notifications:
+  - Firebase Cloud Messaging
+  - OneSignal (alternative)
+```
+
+### 3.3 Real-Time Features
+
+```yaml
+Real-Time Updates:
+  - Socket.io or Firebase Realtime Database
+  - Live impact counter
+  - Instant badge unlocks
+  
+Progressive Web App:
+  - Share impact reports as web pages
+  - Beautiful shareable cards
+```
+
+---
+
+## 4. Report Components Design
+
+### 4.1 Monthly Report Structure
+
+```javascript
+MONTHLY_REPORT_SECTIONS = {
+  hero: {
+    name: "Impact Hero Section",
+    components: [
+      "Animated impact number",
+      "Month-over-month change",
+      "Motivational message",
+      "Streak indicator"
+    ]
+  },
+  
+  milestones: {
+    name: "Achievements Unlocked",
+    components: [
+      "New badges earned",
+      "Progress to next milestone",
+      "Lifetime achievements"
+    ]
+  },
+  
+  breakdown: {
+    name: "Your Impact Breakdown",
+    components: [
+      "Donations by country (map)",
+      "Donations by cause (pie chart)",
+      "Donation timeline (line chart)",
+      "Organizations supported (list)"
+    ]
+  },
+  
+  stories: {
+    name: "Impact Stories",
+    components: [
+      "Real stories from the field",
+      "How your donation helped",
+      "Matched with your interests"
+    ]
+  },
+  
+  comparison: {
+    name: "Your Progress",
+    components: [
+      "This month vs last month",
+      "This month vs your average",
+      "Your best month ever",
+      "Days since first donation"
+    ]
+  },
+  
+  forecast: {
+    name: "Looking Ahead",
+    components: [
+      "Next milestone preview",
+      "Monthly challenges available",
+      "Suggested actions",
+      "Projected annual impact"
+    ]
+  }
+};
+```
+
+### 4.2 Interactive Visualizations
+
+#### Animated Impact Counter
+```javascript
+// components/AnimatedImpactCounter.js
+import React, { useEffect } from 'react';
+import { View, Text, StyleSheet } from 'react-native';
+import Animated, {
+  useSharedValue,
+  useAnimatedProps,
+  withTiming,
+  Easing
+} from 'react-native-reanimated';
+
+export default function AnimatedImpactCounter({ value, prefix = '$', duration = 2000 }) {
+  const animatedValue = useSharedValue(0);
+
+  useEffect(() => {
+    animatedValue.value = withTiming(value, {
+      duration: duration,
+      easing: Easing.bezier(0.25, 0.1, 0.25, 1)
+    });
+  }, [value]);
+
+  const animatedProps = useAnimatedProps(() => {
+    return {
+      text: `${prefix}${Math.floor(animatedValue.value).toLocaleString()}`
+    };
+  });
+
+  return (
+    <View style={styles.container}>
+      <AnimatedText animatedProps={animatedProps} style={styles.number} />
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  number: {
+    fontSize: 48,
+    fontWeight: 'bold',
+    color: '#2ECC71'
+  }
+});
+```
+
+#### Interactive World Map
+```javascript
+// components/ImpactWorldMap.js
+import React from 'react';
+import { View, StyleSheet, TouchableOpacity } from 'react-native';
+import Svg, { Path, Circle, Text as SvgText } from 'react-native-svg';
+import Animated, { useAnimatedProps, withSpring } from 'react-native-reanimated';
+
+export default function ImpactWorldMap({ donations }) {
+  /**
+   * Show animated arcs from user location to donation countries
+   * Countries glow based on donation amount
+   */
+  
+  const [selectedCountry, setSelectedCountry] = React.useState(null);
+  
+  // World map paths (simplified)
+  const worldMapPath = "M 0,0 ... your SVG world map path ...";
+  
+  return (
+    <View style={styles.container}>
+      <Svg width="100%" height="400" viewBox="0 0 1000 500">
+        {/* Base world map */}
+        <Path
+          d={worldMapPath}
+          fill="#E0E0E0"
+          stroke="#999"
+          strokeWidth="0.5"
+        />
+        
+        {/* Donation markers */}
+        {donations.map((donation, index) => (
+          <AnimatedDonationMarker
+            key={donation.country}
+            country={donation.country}
+            amount={donation.amount}
+            coordinates={donation.coordinates}
+            onPress={() => setSelectedCountry(donation)}
+            delay={index * 100}
+          />
+        ))}
+        
+        {/* Connection lines from user to countries */}
+        {donations.map((donation, index) => (
+          <AnimatedArc
+            key={`arc-${donation.country}`}
+            from={userLocation}
+            to={donation.coordinates}
+            delay={index * 150}
+          />
+        ))}
+      </Svg>
+      
+      {selectedCountry && (
+        <CountryDetailPopup
+          country={selectedCountry}
+          onClose={() => setSelectedCountry(null)}
+        />
+      )}
+    </View>
+  );
+}
+
+function AnimatedDonationMarker({ country, amount, coordinates, onPress, delay }) {
+  const scale = useSharedValue(0);
+  const opacity = useSharedValue(0);
+  
+  useEffect(() => {
+    scale.value = withSpring(1, { delay });
+    opacity.value = withTiming(1, { duration: 500, delay });
+  }, []);
+  
+  // Marker size based on amount
+  const radius = Math.min(5 + Math.log(amount) * 2, 20);
+  
+  const animatedProps = useAnimatedProps(() => ({
+    r: radius * scale.value,
+    opacity: opacity.value
+  }));
+  
+  return (
+    <TouchableOpacity onPress={onPress}>
+      <AnimatedCircle
+        cx={coordinates.x}
+        cy={coordinates.y}
+        fill="#E74C3C"
+        animatedProps={animatedProps}
+      />
+      
+      {/* Pulse effect */}
+      <AnimatedPulse
+        cx={coordinates.x}
+        cy={coordinates.y}
+        initialRadius={radius}
+      />
+    </TouchableOpacity>
+  );
+}
+```
+
+#### Progress Ring with Milestones
+```javascript
+// components/ProgressRing.js
+import React from 'react';
+import { View, StyleSheet } from 'react-native';
+import Svg, { Circle, Text as SvgText } from 'react-native-svg';
+import Animated, { useAnimatedProps, withTiming } from 'react-native-reanimated';
+
+export default function ProgressRing({ 
+  current, 
+  goal, 
+  size = 200,
+  strokeWidth = 20,
+  color = '#2ECC71'
+}) {
+  const radius = (size - strokeWidth) / 2;
+  const circumference = radius * 2 * Math.PI;
+  const progress = (current / goal) * 100;
+  
+  const animatedProps = useAnimatedProps(() => {
+    const strokeDashoffset = circumference - (progress / 100) * circumference;
+    
+    return {
+      strokeDashoffset: withTiming(strokeDashoffset, { duration: 1500 })
+    };
+  });
+  
+  return (
+    <View style={styles.container}>
+      <Svg width={size} height={size}>
+        {/* Background circle */}
+        <Circle
+          cx={size / 2}
+          cy={size / 2}
+          r={radius}
+          stroke="#E0E0E0"
+          strokeWidth={strokeWidth}
+          fill="none"
+        />
+        
+        {/* Progress circle */}
+        <AnimatedCircle
+          cx={size / 2}
+          cy={size / 2}
+          r={radius}
+          stroke={color}
+          strokeWidth={strokeWidth}
+          fill="none"
+          strokeDasharray={circumference}
+          animatedProps={animatedProps}
+          strokeLinecap="round"
+          transform={`rotate(-90 ${size / 2} ${size / 2})`}
+        />
+        
+        {/* Center text */}
+        <SvgText
+          x={size / 2}
+          y={size / 2}
+          textAnchor="middle"
+          fontSize="32"
+          fontWeight="bold"
+          fill={color}
+        >
+          {Math.round(progress)}%
+        </SvgText>
+        
+        <SvgText
+          x={size / 2}
+          y={size / 2 + 25}
+          textAnchor="middle"
+          fontSize="14"
+          fill="#666"
+        >
+          ${current} of ${goal}
+        </SvgText>
+      </Svg>
+      
+      <Text style={styles.label}>Next Milestone: Hero Level</Text>
+    </View>
+  );
+}
+```
+
+#### Donation Timeline Chart
+```javascript
+// components/DonationTimeline.js
+import React from 'react';
+import { View, Dimensions } from 'react-native';
+import { LineChart } from 'react-native-chart-kit';
+
+export default function DonationTimeline({ data }) {
+  const screenWidth = Dimensions.get('window').width;
+  
+  return (
+    <LineChart
+      data={{
+        labels: data.months,
+        datasets: [
+          {
+            data: data.amounts,
+            color: (opacity = 1) => `rgba(46, 204, 113, ${opacity})`,
+            strokeWidth: 3
+          }
+        ]
+      }}
+      width={screenWidth - 40}
+      height={220}
+      chartConfig={{
+        backgroundColor: '#fff',
+        backgroundGradientFrom: '#fff',
+        backgroundGradientTo: '#fff',
+        decimalPlaces: 0,
+        color: (opacity = 1) => `rgba(46, 204, 113, ${opacity})`,
+        labelColor: (opacity = 1) => `rgba(0, 0, 0, ${opacity})`,
+        style: {
+          borderRadius: 16
+        },
+        propsForDots: {
+          r: '6',
+          strokeWidth: '2',
+          stroke: '#2ECC71'
+        }
+      }}
+      bezier
+      style={{
+        marginVertical: 8,
+        borderRadius: 16
+      }}
+      withInnerLines={false}
+      withOuterLines={true}
+      withVerticalLabels={true}
+      withHorizontalLabels={true}
+    />
+  );
+}
+```
+
+---
+
+## 5. Complete Monthly Report Screen
+
+```javascript
+// screens/MonthlyReportScreen.js
+import React, { useState, useEffect } from 'react';
+import { 
+  View, 
+  ScrollView, 
+  StyleSheet, 
+  Share,
+  TouchableOpacity,
+  Animated
+} from 'react-native';
+import { Text, Button, Card } from 'react-native-paper';
+import ConfettiCannon from 'react-native-confetti-cannon';
+import LottieView from '@lottiefiles/react-native';
+
+export default function MonthlyReportScreen({ navigation }) {
+  const [report, setReport] = useState(null);
+  const [showConfetti, setShowConfetti] = useState(false);
+  const [newBadges, setNewBadges] = useState([]);
+  
+  useEffect(() => {
+    fetchMonthlyReport();
+  }, []);
+  
+  const fetchMonthlyReport = async () => {
+    const response = await fetch('/api/reports/monthly');
+    const data = await response.json();
+    setReport(data);
+    
+    // Show confetti if new badges earned
+    if (data.new_badges.length > 0) {
+      setNewBadges(data.new_badges);
+      setShowConfetti(true);
+    }
+  };
+  
+  const handleShare = async () => {
+    const message = generateShareMessage(report);
+    await Share.share({
+      message: message,
+      url: report.shareable_url
+    });
+  };
+  
+  if (!report) {
+    return <LoadingScreen />;
+  }
+  
+  return (
+    <ScrollView style={styles.container}>
+      {/* Confetti for achievements */}
+      {showConfetti && (
+        <ConfettiCannon
+          count={200}
+          origin={{ x: -10, y: 0 }}
+          autoStart={true}
+          fadeOut={true}
+          onAnimationEnd={() => setShowConfetti(false)}
+        />
+      )}
+      
+      {/* Hero Section */}
+      <HeroSection report={report} />
+      
+      {/* New Badges */}
+      {newBadges.length > 0 && (
+        <BadgesUnlockedSection badges={newBadges} />
+      )}
+      
+      {/* Impact Summary */}
+      <ImpactSummarySection report={report} />
+      
+      {/* Streak Tracker */}
+      <StreakSection streak={report.streak} />
+      
+      {/* World Map */}
+      <Card style={styles.card}>
+        <Card.Content>
+          <Text style={styles.sectionTitle}>Your Global Impact</Text>
+          <ImpactWorldMap donations={report.donations_by_country} />
+        </Card.Content>
+      </Card>
+      
+      {/* Timeline */}
+      <Card style={styles.card}>
+        <Card.Content>
+          <Text style={styles.sectionTitle}>Donation Trend</Text>
+          <DonationTimeline data={report.timeline} />
+        </Card.Content>
+      </Card>
+      
+      {/* Progress Rings */}
+      <ProgressSection milestones={report.milestones} />
+      
+      {/* Impact Stories */}
+      <ImpactStoriesSection stories={report.impact_stories} />
+      
+      {/* Personal Comparison */}
+      <ComparisonSection comparison={report.comparison} />
+      
+      {/* Monthly Challenges */}
+      <ChallengesSection challenges={report.challenges} />
+      
+      {/* Next Steps */}
+      <NextStepsSection suggestions={report.suggestions} />
+      
+      {/* Share Button */}
+      <Button
+        mode="contained"
+        onPress={handleShare}
+        icon="share"
+        style={styles.shareButton}
+      >
+        Share Your Impact
+      </Button>
+    </ScrollView>
+  );
+}
+
+function HeroSection({ report }) {
+  return (
+    <View style={styles.hero}>
+      <LottieView
+        source={require('../assets/animations/celebration.json')}
+        autoPlay
+        loop={false}
+        style={styles.celebration}
+      />
+      
+      <Text style={styles.heroGreeting}>
+        Amazing work, {report.user_name}!
+      </Text>
+      
+      <AnimatedImpactCounter
+        value={report.monthly_total}
+        prefix="$"
+      />
+      
+      <Text style={styles.heroSubtext}>
+        donated this month
+      </Text>
+      
+      {/* Month-over-month change */}
+      <View style={styles.changeIndicator}>
+        {report.month_over_month_change > 0 ? (
+          <>
+            <Text style={styles.changeUp}>
+              ↑ {report.month_over_month_change}%
+            </Text>
+            <Text style={styles.changeText}>
+              more than last month!
+            </Text>
+          </>
+        ) : report.month_over_month_change === 0 ? (
+          <Text style={styles.changeText}>
+            Same as last month - Staying consistent! 🔥
+          </Text>
+        ) : (
+          <Text style={styles.changeText}>
+            Every bit helps - Keep going! 💪
+          </Text>
+        )}
+      </View>
+    </View>
+  );
+}
+
+function BadgesUnlockedSection({ badges }) {
+  return (
+    <Card style={[styles.card, styles.badgesCard]}>
+      <Card.Content>
+        <Text style={styles.sectionTitle}>🎉 New Achievements Unlocked!</Text>
+        
+        <View style={styles.badgesGrid}>
+          {badges.map((badge, index) => (
+            <BadgeCard
+              key={badge.id}
+              badge={badge}
+              delay={index * 200}
+            />
+          ))}
+        </View>
+      </Card.Content>
+    </Card>
+  );
+}
+
+function BadgeCard({ badge, delay }) {
+  const scaleAnim = new Animated.Value(0);
+  
+  useEffect(() => {
+    Animated.spring(scaleAnim, {
+      toValue: 1,
+      delay: delay,
+      tension: 50,
+      friction: 7,
+      useNativeDriver: true
+    }).start();
+  }, []);
+  
+  return (
+    <Animated.View style={[
+      styles.badgeCard,
+      { transform: [{ scale: scaleAnim }] }
+    ]}>
+      <Text style={styles.badgeEmoji}>{badge.icon}</Text>
+      <Text style={styles.badgeName}>{badge.name}</Text>
+      <Text style={styles.badgeDescription}>{badge.description}</Text>
+    </Animated.View>
+  );
+}
+
+function StreakSection({ streak }) {
+  return (
+    <Card style={styles.card}>
+      <Card.Content>
+        <Text style={styles.sectionTitle}>Your Streak {streak.emoji}</Text>
+        
+        <View style={styles.streakContainer}>
+          <View style={styles.streakCurrent}>
+            <Text style={styles.streakNumber}>{streak.current}</Text>
+            <Text style={styles.streakLabel}>months in a row</Text>
+          </View>
+          
+          {streak.isActive && (
+            <View style={styles.streakIndicator}>
+              <Text style={styles.streakActive}>ACTIVE STREAK!</Text>
+            </View>
+          )}
+        </View>
+        
+        <View style={styles.streakMilestone}>
+          <ProgressBar
+            progress={streak.current / streak.next_milestone}
+            color="#F39C12"
+          />
+          <Text style={styles.streakMilestoneText}>
+            {streak.next_milestone - streak.current} months until {streak.next_reward}
+          </Text>
+        </View>
+        
+        {streak.longest > streak.current && (
+          <Text style={styles.streakRecord}>
+            Your record: {streak.longest} months
+          </Text>
+        )}
+      </Card.Content>
+    </Card>
+  );
+}
+
+function ImpactStoriesSection({ stories }) {
+  const [currentStory, setCurrentStory] = useState(0);
+  
+  return (
+    <Card style={styles.card}>
+      <Card.Content>
+        <Text style={styles.sectionTitle}>How You Helped</Text>
+        
+        <View style={styles.storyContainer}>
+          <Image
+            source={{ uri: stories[currentStory].image }}
+            style={styles.storyImage}
+          />
+          
+          <Text style={styles.storyText}>
+            {stories[currentStory].text}
+          </Text>
+          
+          <Text style={styles.storyOrg}>
+            — {stories[currentStory].organization}
+          </Text>
+          
+          {/* Story pagination */}
+          <View style={styles.storyDots}>
+            {stories.map((_, index) => (
+              <TouchableOpacity
+                key={index}
+                onPress={() => setCurrentStory(index)}
+              >
+                <View style={[
+                  styles.dot,
+                  index === currentStory && styles.dotActive
+                ]} />
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+      </Card.Content>
+    </Card>
+  );
+}
+
+function ComparisonSection({ comparison }) {
+  return (
+    <Card style={styles.card}>
+      <Card.Content>
+        <Text style={styles.sectionTitle}>Your Progress</Text>
+        
+        <View style={styles.comparisonGrid}>
+          <ComparisonStat
+            label="vs Last Month"
+            value={comparison.vs_last_month}
+            format="percentage"
+          />
+          
+          <ComparisonStat
+            label="vs Your Average"
+            value={comparison.vs_average}
+            format="percentage"
+          />
+          
+          <ComparisonStat
+            label="Best Month Ever"
+            value={comparison.best_month}
+            format="currency"
+            isRecord={comparison.is_new_record}
+          />
+          
+          <ComparisonStat
+            label="Days Contributing"
+            value={comparison.days_since_first}
+            format="number"
+            suffix=" days"
+          />
+        </View>
+      </Card.Content>
+    </Card>
+  );
+}
+
+function ChallengesSection({ challenges }) {
+  return (
+    <Card style={styles.card}>
+      <Card.Content>
+        <Text style={styles.sectionTitle}>This Month's Challenges</Text>
+        
+        {challenges.map(challenge => (
+          <ChallengeCard
+            key={challenge.id}
+            challenge={challenge}
+          />
+        ))}
+      </Card.Content>
+    </Card>
+  );
+}
+
+function ChallengeCard({ challenge }) {
+  return (
+    <View style={styles.challengeCard}>
+      <View style={styles.challengeHeader}>

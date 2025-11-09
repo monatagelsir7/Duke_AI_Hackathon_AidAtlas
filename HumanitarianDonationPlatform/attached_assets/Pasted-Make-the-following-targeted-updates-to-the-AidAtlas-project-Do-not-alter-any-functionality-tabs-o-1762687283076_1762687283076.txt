@@ -1,0 +1,41 @@
+Make the following targeted updates to the AidAtlas project. Do not alter any functionality, tabs, or existing structure except where specified.
+
+1. 
+1. IMPACT TAB:
+   Move the world map so that it appears directly below the text “Your Impact Dashboard.” 
+   It should be the first visible element when a user opens the Impact tab. Keep everything the same, only reposition it.
+
+2. DISCOVER TAB:
+   In all cause cards where the button currently says “Pass,” change the text to “Next.”
+   Keep everything the same just change the word. The button action should behave exactly the same.
+
+3. In the quiz section remove the question about how much we are willing to donate. That's the question that comes right before we see the cause cards. It’s one of the filtering questions but we believe it doesn’t serve much purpose. 
+
+4. LANDING PAGE (Home):
+   Redesign only this page to make it feel like the start of a meaningful global quest. 
+   The design should still feel humanitarian but playful but still respectful.
+
+   Keep the existing hero image exactly as it is.
+   Replace the main heading and subheading to reflect the sense of mission. 
+   For example:
+     - Heading: “Your Journey to Make an Impact Starts Here”
+     - Subheading: “Discover where your help matters most and take your first step toward change.”
+
+   Make the landing experience feel dynamic and motivational:
+   - Add subtle motion (gentle fade-ins, smooth scrolling transitions, or light hover animations).
+   - Use optimistic, hopeful tones in the color palette (soft blues, purples, and whites).
+   - Include small animated accents (e.g., a slowly moving compass icon or glowing map outline) that hint at adventure and purpose.
+   - Keep copy concise and warm—no corporate tone, no reward mechanics, and no feature repetition from other tabs.
+- I still love the info on the landing page such as the “how it works” “why trust us” info and the “global impact” on it – keep those just again reformatting it will be key to give a different vibe to it. 
+- You could add other things that might be good but no repetition with other taps. 
+
+   The goal: when users arrive, it should feel like the opening scene of a quest, inviting, inspiring, and emotionally intelligent, without trivializing the seriousness of the platform’s mission but again still playful.
+
+4. RESPONSIVENESS:
+   Ensure all changes display correctly on both desktop and mobile views.
+
+5. FINAL CHECK:
+   Verify that:
+   - The Impact tab shows the map first.
+   - The “Pass” buttons now say “Next.”
+   - The landing page feels like an inspiring humanitarian quest

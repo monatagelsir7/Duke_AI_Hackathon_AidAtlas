@@ -1,0 +1,702 @@
+# Simplified Personalization Quiz - 2 Questions + Behavioral Learning
+
+## 1. Minimalist Quiz Philosophy
+
+### Why Only 2 Questions?
+- **Reduces friction**: Users start engaging faster
+- **Prevents drop-off**: Minimal commitment barrier
+- **Emphasizes learning**: Algorithm learns from actual behavior, not stated preferences
+- **Better accuracy**: Actions speak louder than words - donations and swipes reveal true preferences
+
+### The Trade-off
+- **Cold start challenge**: Less initial data means first ~10-20 recommendations need careful curation
+- **Solution**: Use demographic data from sign-up + these 2 questions + aggressive behavioral learning
+
+---
+
+## 2. The Two Essential Questions
+
+### Question 1: Geographic Interest (Multi-select)
+**Type**: Interactive world map with clickable regions
+
+**Question**: *"Which regions of the world do you want to support?"*
+
+**Visual**: World map divided into color-coded regions
+
+**Options** (tap on map or list):
+- ☐ Middle East & North Africa
+- ☐ Sub-Saharan Africa  
+- ☐ Eastern Europe & Central Asia
+- ☐ South Asia
+- ☐ East & Southeast Asia
+- ☐ Latin America & Caribbean
+- ☐ Oceania & Pacific Islands
+- ✨ **Show me where help is needed most** (algorithm decides)
+
+**Why this is essential**:
+- Most fundamental filter - geographic proximity/connection matters
+- Prevents showing irrelevant conflicts (someone focused on Middle East probably doesn't want African conflicts initially)
+- "Show me where needed most" option allows flexibility
+- Captures diaspora connections and personal ties
+
+**Data captured**:
+```json
+{
+  "geographic_preferences": ["middle_east", "eastern_europe"],
+  "geographic_flexibility": false,
+  "timestamp": "2024-11-08T10:30:00Z"
+}
+```
+
+**UI Considerations**:
+- **Allow multiple selections**: Most users care about 2-3 regions
+- **Make "Show me where needed most" prominent**: Encourage exploration
+- **Show example countries**: "Middle East & North Africa (Syria, Yemen, Palestine...)"
+- **Visual heat map**: Optionally show intensity of current conflicts per region
+
+---
+
+### Question 2: Primary Causes (Select top 3)
+**Type**: Card-based selection with large, tappable icons
+
+**Question**: *"Choose 3 causes that matter most to you"*
+
+**Visual**: Grid of cards with icons and brief descriptions
+
+**Options** (select exactly 3):
+
+1. **👶 Children's Welfare**
+   - *Protecting and supporting children in crisis*
+   
+2. **👩 Women & Girls' Safety**
+   - *Preventing violence, ensuring rights and dignity*
+   
+3. **🏥 Medical & Healthcare**
+   - *Emergency medical care and health services*
+   
+4. **🍎 Food & Nutrition**
+   - *Fighting hunger and malnutrition*
+   
+5. **💧 Clean Water & Sanitation**
+   - *Access to safe water and hygiene*
+   
+6. **🏠 Shelter & Housing**
+   - *Safe places to live for displaced families*
+   
+7. **📚 Education**
+   - *School access and learning for children*
+   
+8. **🧠 Mental Health & Trauma**
+   - *Psychological support for survivors*
+   
+9. **🛡️ Human Rights & Protection**
+   - *Defending rights, preventing abuse*
+   
+10. **🚨 Emergency Relief**
+    - *Rapid response to crises and disasters*
+
+**Why these causes**:
+- Covers the full humanitarian spectrum
+- Each maps directly to organization specializations
+- Mix of immediate needs and longer-term support
+- Resonates emotionally without being overwhelming
+
+**Interaction**:
+- Tap to select (card highlights)
+- Must choose exactly 3 (forces prioritization)
+- Order matters: First selection = highest priority
+- Can change selection before confirming
+
+**Data captured**:
+```json
+{
+  "cause_priorities": [
+    {"cause": "children_welfare", "rank": 1, "weight": 1.0},
+    {"cause": "medical_healthcare", "rank": 2, "weight": 0.85},
+    {"cause": "emergency_relief", "rank": 3, "weight": 0.70}
+  ],
+  "timestamp": "2024-11-08T10:31:00Z"
+}
+```
+
+---
+
+## 3. Leveraging Sign-Up Data
+
+### Data Already Collected During Registration
+From the sign-up form, you already have:
+- **Age** → Correlates with donation patterns, tech comfort
+- **Gender** → May correlate with cause preferences (statistically)
+- **Nationality** → Strong predictor for regional interest
+- **Country of residence** → Affects protest/petition availability
+- **Initial interests** (from chips selection) → Additional cause signals
+
+### Enriching the Initial Profile
+
+```json
+{
+  "user_id": "abc123",
+  "quiz_data": {
+    "geographic_preferences": ["middle_east", "eastern_europe"],
+    "geographic_flexibility": false,
+    "cause_priorities": [
+      {"cause": "children_welfare", "rank": 1},
+      {"cause": "medical_healthcare", "rank": 2},
+      {"cause": "emergency_relief", "rank": 3}
+    ]
+  },
+  "signup_data": {
+    "age": 28,
+    "gender": "female",
+    "nationality": "USA",
+    "country_of_residence": "USA",
+    "signup_interests": ["Children's Welfare", "Medical Aid", "Education"]
+  },
+  "inferred_preferences": {
+    "likely_budget_tier": 2,  // Based on age + country
+    "content_intensity": "moderate",  // Default for new users
+    "urgency_preference": 0.5,  // Neutral starting point
+    "trust_factors": ["transparency", "ratings"]  // Default values
+  }
+}
+```
+
+---
+
+## 4. Cold Start Recommendation Strategy
+
+### Initial Recommendation Pool (First 20 profiles)
+
+**Tier 1: High Confidence Matches (60%)**
+- Match user's selected regions exactly
+- Match at least 2 of 3 selected causes
+- High-profile conflicts with verified organizations
+- Recent updates (< 7 days old)
+
+**Tier 2: Exploratory Recommendations (30%)**
+- Different regions from what user selected (test flexibility)
+- Match 1 of 3 causes but highly rated organizations
+- "Forgotten crises" that need attention
+- Mix urgency levels (emergency vs. long-term)
+
+**Tier 3: Popular Defaults (10%)**
+- Most-donated-to conflicts globally
+- Organizations with highest ratings
+- Acts as baseline for comparison
+
+### Example Cold Start Algorithm
+
+```python
+def generate_cold_start_recommendations(user_profile):
+    """
+    Generate first 20 recommendations for new user with only 2 quiz questions
+    """
+    recommendations = []
+    
+    # TIER 1: High confidence (12 profiles)
+    high_confidence = query_conflicts(
+        regions=user_profile['geographic_preferences'],
+        causes=user_profile['cause_priorities'],
+        min_cause_match=2,
+        days_since_update__lte=7,
+        org_rating__gte=3.5,
+        limit=12
+    )
+    recommendations.extend(high_confidence)
+    
+    # TIER 2: Exploratory (6 profiles)
+    exploratory = []
+    
+    # Try different regions (2 profiles)
+    different_regions = query_conflicts(
+        regions__not_in=user_profile['geographic_preferences'],
+        causes=user_profile['cause_priorities'],
+        min_cause_match=1,
+        urgency='high',
+        limit=2
+    )
+    exploratory.extend(different_regions)
+    
+    # Forgotten crises (2 profiles)
+    forgotten = query_conflicts(
+        media_attention='low',
+        causes=user_profile['cause_priorities'],
+        min_cause_match=1,
+        limit=2
+    )
+    exploratory.extend(forgotten)
+    
+    # Long-term development projects (2 profiles)
+    long_term = query_conflicts(
+        intervention_type='sustainable',
+        causes=user_profile['cause_priorities'],
+        limit=2
+    )
+    exploratory.extend(long_term)
+    
+    recommendations.extend(exploratory)
+    
+    # TIER 3: Global popular (2 profiles)
+    popular = query_conflicts(
+        order_by='total_donations_desc',
+        limit=2
+    )
+    recommendations.extend(popular)
+    
+    # Shuffle within tiers to prevent bias
+    shuffle_within_tiers(recommendations)
+    
+    return recommendations
+```
+
+---
+
+## 5. Aggressive Behavioral Learning System
+
+### Every Interaction Teaches the Algorithm
+
+**Swipe Actions** (Primary signals):
+```python
+swipe_weights = {
+    'swipe_up': +2.0,      # Strong positive signal
+    'swipe_pass': -0.5,    # Weak negative signal  
+    'swipe_down': -1.0,    # Moderate negative signal
+}
+```
+
+**Time-Based Signals**:
+```python
+time_weights = {
+    'time_spent_0_5s': -0.3,      # Instant pass = not interested
+    'time_spent_5_15s': 0.0,      # Quick scan = neutral
+    'time_spent_15_30s': +0.5,    # Reading = interested
+    'time_spent_30s_plus': +1.0,  # Deep read = very interested
+}
+```
+
+**Engagement Actions**:
+```python
+engagement_weights = {
+    'view_full_details': +1.5,
+    'view_organization_page': +1.8,
+    'share_profile': +2.0,
+    'save_for_later': +1.5,
+    'click_external_link': +1.2,
+}
+```
+
+**Conversion Actions** (Strongest signals):
+```python
+conversion_weights = {
+    'donate_one_time': +5.0,
+    'donate_recurring': +8.0,
+    'sign_petition': +1.5,
+    'register_for_protest': +2.0,
+    'share_advocacy': +1.8,
+}
+```
+
+### Real-Time Preference Vector Updates
+
+After **every single interaction**, update user preferences:
+
+```python
+def update_preferences_from_behavior(user_id, event):
+    """
+    Update user preference vector in real-time after each action
+    """
+    # Get current preferences
+    user_prefs = get_user_preferences(user_id)
+    
+    # Get features of the conflict they interacted with
+    conflict = get_conflict_details(event.conflict_id)
+    
+    # Calculate learning rate (decreases over time as we get more data)
+    interaction_count = get_user_interaction_count(user_id)
+    learning_rate = 0.3 / (1 + interaction_count / 50)  # Decays from 0.3 to 0.1
+    
+    # Get event weight
+    event_weight = get_event_weight(event.action_type)
+    
+    # Update geographic preferences
+    if event_weight > 0:  # Positive action
+        user_prefs['geographic_preferences'][conflict.region] += (
+            learning_rate * event_weight
+        )
+    else:  # Negative action
+        user_prefs['geographic_preferences'][conflict.region] += (
+            learning_rate * event_weight * 0.5  # Penalize less than we reward
+        )
+    
+    # Update cause preferences
+    for cause in conflict.causes:
+        user_prefs['cause_preferences'][cause] += learning_rate * event_weight
+    
+    # Update demographic preferences
+    for demographic in conflict.affected_groups:
+        user_prefs['demographic_preferences'][demographic] += (
+            learning_rate * event_weight
+        )
+    
+    # Update urgency preference (shift toward this conflict's urgency level)
+    current_urgency = user_prefs['urgency_preference']
+    conflict_urgency = conflict.urgency_level
+    user_prefs['urgency_preference'] += (
+        learning_rate * event_weight * (conflict_urgency - current_urgency)
+    )
+    
+    # Normalize all preferences to prevent runaway values
+    normalize_preferences(user_prefs)
+    
+    # Save updated preferences
+    save_user_preferences(user_id, user_prefs)
+    
+    # Log for analytics
+    log_preference_update(user_id, event, user_prefs)
+```
+
+### Preference Decay (Prevent Stale Profiles)
+
+```python
+def apply_preference_decay(user_id):
+    """
+    Run daily: Decay old preferences to keep profile fresh
+    Prevents users from being stuck with outdated interests
+    """
+    user_prefs = get_user_preferences(user_id)
+    days_since_last_interaction = get_days_since_last_interaction(user_id)
+    
+    # Only decay if user has been inactive
+    if days_since_last_interaction > 7:
+        decay_rate = 0.02 * days_since_last_interaction  # 2% per day of inactivity
+        
+        # Decay behavioral preferences toward quiz baseline
+        for key in user_prefs['behavioral_preferences']:
+            quiz_baseline = user_prefs['quiz_baseline'][key]
+            current_value = user_prefs['behavioral_preferences'][key]
+            
+            # Move back toward quiz response
+            user_prefs['behavioral_preferences'][key] = (
+                current_value * (1 - decay_rate) + 
+                quiz_baseline * decay_rate
+            )
+    
+    save_user_preferences(user_id, user_prefs)
+```
+
+---
+
+## 6. Hybrid Scoring: Quiz + Behavior
+
+### Progressive Weighting Strategy
+
+```python
+def calculate_recommendation_score(user_id, conflict_id, org_id):
+    """
+    Blend quiz preferences with behavioral data
+    Weight shifts over time as we learn more
+    """
+    user_prefs = get_user_preferences(user_id)
+    interaction_count = get_user_interaction_count(user_id)
+    
+    # Calculate blending weights (quiz → behavior over time)
+    if interaction_count < 10:
+        quiz_weight = 0.80
+        behavior_weight = 0.20
+    elif interaction_count < 30:
+        quiz_weight = 0.50
+        behavior_weight = 0.50
+    elif interaction_count < 100:
+        quiz_weight = 0.20
+        behavior_weight = 0.80
+    else:
+        quiz_weight = 0.10
+        behavior_weight = 0.90
+    
+    # Calculate quiz-based score
+    quiz_score = calculate_quiz_match_score(
+        user_prefs['quiz_baseline'],
+        conflict_id,
+        org_id
+    )
+    
+    # Calculate behavior-based score
+    behavior_score = calculate_behavioral_match_score(
+        user_prefs['behavioral_preferences'],
+        conflict_id,
+        org_id
+    )
+    
+    # Blend scores
+    final_score = (
+        quiz_weight * quiz_score +
+        behavior_weight * behavior_score
+    )
+    
+    # Apply boosts
+    final_score *= get_recency_boost(conflict_id)
+    final_score *= get_diversity_boost(user_id, conflict_id)
+    
+    return final_score
+
+def calculate_quiz_match_score(quiz_prefs, conflict_id, org_id):
+    """
+    Score based on 2-question quiz responses
+    """
+    conflict = get_conflict_details(conflict_id)
+    org = get_organization_details(org_id)
+    
+    score = 0.0
+    
+    # Geographic match (60% of quiz score)
+    if conflict.region in quiz_prefs['geographic_preferences']:
+        score += 0.60
+    elif quiz_prefs['geographic_flexibility']:
+        score += 0.30  # Partial credit for flexibility
+    
+    # Cause match (40% of quiz score)
+    user_causes = [c['cause'] for c in quiz_prefs['cause_priorities']]
+    matching_causes = set(user_causes) & set(org.causes)
+    
+    if len(matching_causes) >= 2:
+        score += 0.40
+    elif len(matching_causes) == 1:
+        score += 0.25
+    
+    return score
+
+def calculate_behavioral_match_score(behavioral_prefs, conflict_id, org_id):
+    """
+    Score based on learned behavior patterns
+    """
+    conflict = get_conflict_details(conflict_id)
+    org = get_organization_details(org_id)
+    
+    score = 0.0
+    
+    # Geographic preference (from behavior)
+    geo_score = behavioral_prefs['geographic_preferences'].get(
+        conflict.region, 0.0
+    )
+    score += 0.30 * normalize_score(geo_score)
+    
+    # Cause preferences (from behavior)
+    cause_scores = [
+        behavioral_prefs['cause_preferences'].get(cause, 0.0)
+        for cause in org.causes
+    ]
+    avg_cause_score = sum(cause_scores) / len(cause_scores) if cause_scores else 0
+    score += 0.25 * normalize_score(avg_cause_score)
+    
+    # Demographic preferences
+    demo_scores = [
+        behavioral_prefs['demographic_preferences'].get(demo, 0.0)
+        for demo in conflict.affected_groups
+    ]
+    avg_demo_score = sum(demo_scores) / len(demo_scores) if demo_scores else 0
+    score += 0.20 * normalize_score(avg_demo_score)
+    
+    # Urgency alignment
+    urgency_diff = abs(
+        behavioral_prefs['urgency_preference'] - conflict.urgency_level
+    )
+    urgency_score = 1 - urgency_diff
+    score += 0.15 * urgency_score
+    
+    # Organization trust alignment
+    org_trust_score = calculate_org_trust_match(behavioral_prefs, org)
+    score += 0.10 * org_trust_score
+    
+    return score
+```
+
+---
+
+## 7. Exploration vs. Exploitation Balance
+
+### Preventing Filter Bubbles
+
+```python
+def apply_diversity_boost(user_id, conflict_list):
+    """
+    Ensure users see diverse conflicts, not just their bubble
+    """
+    recent_history = get_recent_interactions(user_id, days=7)
+    
+    for conflict in conflict_list:
+        # Penalize if too similar to recent views
+        similarity = calculate_similarity_to_history(conflict, recent_history)
+        
+        if similarity > 0.8:  # Very similar to recent
+            conflict.score *= 0.7  # 30% penalty
+        
+        # Boost underrepresented regions
+        user_region_distribution = get_user_region_distribution(user_id)
+        if user_region_distribution.get(conflict.region, 0) < 0.1:
+            conflict.score *= 1.3  # 30% boost for exploration
+    
+    return conflict_list
+
+def inject_exploration_cards(recommendations, exploration_rate=0.15):
+    """
+    Randomly inject unexpected but potentially interesting conflicts
+    """
+    num_explorations = int(len(recommendations) * exploration_rate)
+    
+    # Get random conflicts from underserved regions
+    exploration_cards = query_conflicts(
+        order_by='random',
+        media_attention='low',
+        limit=num_explorations
+    )
+    
+    # Replace lowest-scored recommendations with exploration cards
+    recommendations.sort(key=lambda x: x.score)
+    recommendations[:num_explorations] = exploration_cards
+    recommendations.sort(key=lambda x: x.score, reverse=True)
+    
+    return recommendations
+```
+
+---
+
+## 8. Database Schema for Minimal Quiz
+
+### Tables
+
+```sql
+-- Simplified quiz responses (just 2 questions)
+CREATE TABLE quiz_responses (
+    user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    geographic_preferences TEXT[] NOT NULL,  -- Array of regions
+    geographic_flexibility BOOLEAN DEFAULT false,
+    cause_priorities JSONB NOT NULL,  -- [{"cause": "...", "rank": 1}, ...]
+    completed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- User preference vector (quiz + behavioral)
+CREATE TABLE user_preference_vectors (
+    user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    
+    -- Quiz baseline (never changes)
+    quiz_baseline JSONB NOT NULL,
+    
+    -- Behavioral preferences (updated constantly)
+    behavioral_preferences JSONB NOT NULL,
+    
+    -- Metadata
+    interaction_count INTEGER DEFAULT 0,
+    last_interaction_at TIMESTAMP,
+    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    version INTEGER DEFAULT 1
+);
+
+-- Behavioral events (for learning)
+CREATE TABLE user_behavior_events (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    event_type VARCHAR(50) NOT NULL,  -- swipe_up, swipe_down, donate, etc.
+    conflict_id UUID REFERENCES conflicts(id),
+    organization_id UUID REFERENCES organizations(id),
+    
+    -- Context
+    time_spent_seconds INTEGER,
+    session_id UUID,
+    
+    -- Metadata
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_behavior_user_id ON user_behavior_events(user_id);
+CREATE INDEX idx_behavior_event_type ON user_behavior_events(event_type);
+CREATE INDEX idx_behavior_created_at ON user_behavior_events(created_at);
+```
+
+---
+
+## 9. Implementation Phases
+
+### Phase 1: MVP (Week 1-2)
+- [ ] Build 2-question quiz UI
+- [ ] Store quiz responses in database
+- [ ] Implement basic cold-start algorithm (quiz-only)
+- [ ] Create initial preference vector from quiz
+- [ ] Generate first 20 recommendations
+
+### Phase 2: Behavioral Tracking (Week 3-4)
+- [ ] Track all swipe actions
+- [ ] Track time spent on each card
+- [ ] Track engagement actions (view details, share, etc.)
+- [ ] Store events in database
+- [ ] Build analytics dashboard to monitor signals
+
+### Phase 3: Learning System (Week 5-6)
+- [ ] Implement real-time preference updates
+- [ ] Build hybrid scoring (quiz + behavior)
+- [ ] Add progressive weighting (shift from quiz to behavior)
+- [ ] Test recommendation accuracy
+
+### Phase 4: Optimization (Week 7-8)
+- [ ] Add exploration/exploitation balance
+- [ ] Implement preference decay
+- [ ] Add diversity boosting
+- [ ] Fine-tune weights based on conversion data
+- [ ] A/B test different learning rates
+
+---
+
+## 10. Success Metrics
+
+### Quiz Performance
+- **Completion rate**: % who finish both questions
+- **Time to complete**: Should be < 30 seconds
+- **Selection diversity**: Are users picking diverse regions/causes?
+
+### Cold Start Performance
+- **First donation**: How many swipes until first donation?
+- **Engagement rate**: % of first 20 profiles that get swipe-up
+- **Session length**: Time spent in app during first session
+
+### Learning System Performance
+- **Prediction accuracy**: After N swipes, how accurate are recommendations?
+- **Donation conversion**: Does it improve over time per user?
+- **Diversity**: Are users discovering new regions/causes?
+- **Retention**: Do users come back after 1 week, 1 month?
+
+### Benchmarks to Aim For
+- 90%+ quiz completion rate
+- 50%+ engagement rate on first 20 profiles
+- First donation within 30 cards viewed
+- 3+ minute average session length
+- 70%+ accuracy after 50 interactions
+
+---
+
+## 11. Why This Approach Works
+
+### Advantages of Minimal Quiz + Behavioral Learning
+
+1. **Lower friction**: Users start engaging immediately
+2. **More accurate**: Actions reveal true preferences better than questions
+3. **Adaptive**: Handles preference changes over time naturally
+4. **Scalable**: Same system works for 100 or 100,000 users
+5. **Privacy-friendly**: Don't need to ask intrusive questions
+
+### Handling the Cold Start Problem
+
+The combination of:
+- 2 essential quiz questions (geography + causes)
+- Sign-up demographic data (age, nationality, residence)
+- Smart default assumptions (moderate urgency, transparency-focused)
+- Aggressive early learning (high learning rate first 50 interactions)
+- Exploration injection (15% random recommendations)
+
+...provides enough signal to make good initial recommendations while learning quickly.
+
+---
+
+Would you like me to:
+1. **Build the 2-question quiz UI** in React Native?
+2. **Implement the behavioral tracking system** with specific event listeners?
+3. **Write the recommendation algorithm code** in Python or Node.js?
+4. **Design the API endpoints** for quiz submission and preference updates?

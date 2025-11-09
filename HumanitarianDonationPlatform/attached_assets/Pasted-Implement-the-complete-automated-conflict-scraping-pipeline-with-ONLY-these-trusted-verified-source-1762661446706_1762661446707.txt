@@ -1,0 +1,101 @@
+Implement the complete automated conflict scraping pipeline with ONLY these trusted, verified sources:
+
+TRUSTED DATA SOURCES TO USE:
+
+1. UN OCHA ReliefWeb API (PRIMARY SOURCE - MUST USE):
+   - API: https://api.reliefweb.int/v1/reports
+   - Use the scraper code from reliefweb-scraper.ts that's already implemented
+   - This is pre-verified humanitarian data from the United Nations
+   - Fetch reports from last 30 days for initial run, then 7 days for daily updates
+
+2. ACLED API (Armed Conflict Location & Event Data):
+   - API: https://api.acleddata.com/acled/read
+   - Free API key required: https://developer.acleddata.com/
+   - Academic-grade conflict verification
+   - Filter: Only include countries with 10+ conflict events OR 50+ fatalities in past 7 days
+   - This identifies active armed conflicts
+
+3. UNHCR Data API (Refugee displacement data):
+   - API: https://data.unhcr.org/
+   - Displacement = indicator of active crisis
+   - Use to identify refugee-producing conflicts
+
+4. ICRC (International Red Cross) - Situation Reports:
+   - RSS Feed: https://www.icrc.org/en/rss-feeds
+   - Only use their official situation reports
+   - They only report where they have ground presence = highly credible
+
+DO NOT scrape from:
+- General news sites (Reuters, BBC, AP) - only use if they appear in ReliefWeb reports
+- Social media
+- Wikipedia
+- Unverified blogs or forums
+- Any site without official humanitarian credentials
+
+IMPLEMENTATION REQUIREMENTS:
+
+1. USE EXISTING SCRAPER CODE:
+   - You already have reliefweb-scraper.ts implemented - use it
+   - Follow the exact validation and fact-checking pipeline from the PDF document
+   - Implement the LLM processor with structured JSON output (page 15-18 of PDF)
+   - Use the fact-checking validator (page 21-25 of PDF)
+
+2. PREVENT HALLUCINATIONS:
+   - Force Claude API to use structured JSON output with explicit source citations
+   - Low temperature (0.1) for factual responses
+   - Validate affected country identification (don't confuse aggressor with victim)
+   - Example: If sources mention "Russia invaded Ukraine" → affected country is UKRAINE, not Russia
+   - Reject profiles with confidence score < 0.6
+   - Require source citation for every fact in the profile
+
+3. AUTOMATED DAILY PIPELINE:
+   - Run complete pipeline automatically every 24 hours at midnight UTC
+   - Full workflow: Scraping → Deduplication → LLM Processing → Validation → Auto-Publish (if passes validation)
+   - Initial run: daysBack: 30, processLimit: 50
+   - Daily runs: daysBack: 7, processLimit: 50
+   - Skip admin approval queue - auto-publish conflicts that pass validation
+   - Only send to admin review if: confidence < 0.7, validation errors, or potential aggressor misclassification
+
+4. REGION FILTERING FOR USER PREFERENCES:
+   - When user sets region preferences during onboarding, store them in user.preferences.regions
+   - In Discover page, filter conflicts to show only regions user selected
+   - Regions should be: Africa, Middle East, Eastern Europe, South Asia, Southeast Asia, Latin America, Central Asia
+   - If user selected NO regions, show all conflicts
+   - Make sure region filtering works with 30-50+ conflicts, not just 6
+
+5. IMAGE HANDLING (NO GRAPHIC CONTENT):
+   - Check if ReliefWeb API response includes images
+   - Only use images that are NOT graphic (no blood, bodies, violence, destruction)
+   - Accept: maps, aid distribution, meetings, infrastructure, landscapes
+   - Reject: casualties, graphic violence, bombing aftermath
+   - If no suitable image OR image is graphic: create colored severity card
+     * Critical = deep red background
+     * High = orange background
+     * Moderate = yellow background
+   - Add country name and region to card
+   - NEVER generate fake AI images of crises
+
+6. DATA QUALITY CHECKS:
+   - Deduplicate conflicts by country code before LLM processing
+   - Verify all facts have source citations
+   - Check for aggressor misclassification (aggressor nations should NOT be marked as affected countries)
+   - Validate humanitarian impact numbers against source documents
+   - Flag conflicts with contradictory information between sources
+
+7. CRON JOB SETUP:
+   - Schedule: 0 0 * * * (midnight UTC daily)
+   - Graceful error handling (log errors, don't crash)
+   - Retry logic if API fails (wait 5 min, retry 3 times)
+   - Log: pipeline start, conflicts scraped, conflicts published, any errors
+
+EXECUTE THIS NOW:
+
+1. Run the pipeline immediately with initial 30-day scrape
+2. Set up cron job for daily automated runs
+3. Ensure region filtering works correctly in Discover.tsx
+4. Auto-publish validated conflicts (skip admin approval for now)
+5. Log results so we can verify it worked
+
+After implementation, the database should have 30-50+ verified conflicts from trusted humanitarian sources, with proper region tags for user filtering. The pipeline should run automatically every day without manual intervention.
+
+Do NOT show me examples or confirmations - just implement the complete automated system using the trusted sources listed above and make it live.

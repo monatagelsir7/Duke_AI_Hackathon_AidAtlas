@@ -1,0 +1,991 @@
+# User Authentication & Onboarding - Technical Implementation Guide
+
+## 1. Technology Stack Overview
+
+### 1.1 Frontend (Mobile App)
+```
+Framework: React Native with Expo
+UI Components: React Native Paper or NativeBase
+Form Management: React Hook Form
+Validation: Zod or Yup
+Navigation: React Navigation
+State Management: Zustand or Redux Toolkit
+```
+
+### 1.2 Backend
+```
+API Framework: Node.js with Express.js
+Authentication: Firebase Authentication (recommended) or Supabase Auth
+Database: PostgreSQL
+ORM: Prisma or TypeORM
+Email Service: SendGrid or AWS SES
+SMS Service: Twilio or AWS SNS
+Environment Management: dotenv
+Security: helmet, cors, express-rate-limit
+```
+
+### 1.3 Why Firebase Authentication?
+**Pros:**
+- Built-in email/phone verification
+- Handles OTP generation and delivery
+- Rate limiting and fraud prevention included
+- Multi-factor authentication ready
+- Session management handled
+- SDKs for React Native
+- Scales automatically
+- GDPR compliant
+
+**Alternative: Supabase Auth**
+- Open source
+- PostgreSQL integration
+- Similar features to Firebase
+- More control over data
+- Self-hosting option
+
+---
+
+## 2. Detailed Implementation Steps
+
+### 2.1 Environment Setup
+
+#### Install Dependencies
+```bash
+# React Native Project Setup
+npx create-expo-app humanitarian-app
+cd humanitarian-app
+
+# Install authentication and form dependencies
+npm install @react-native-firebase/app @react-native-firebase/auth
+npm install react-hook-form zod
+npm install @react-navigation/native @react-navigation/stack
+npm install react-native-paper
+npm install react-native-safe-area-context react-native-screens
+
+# Backend setup
+mkdir backend && cd backend
+npm init -y
+npm install express firebase-admin pg prisma
+npm install dotenv cors helmet express-rate-limit
+npm install -D typescript @types/node @types/express ts-node nodemon
+```
+
+#### Firebase Configuration
+1. Create Firebase project at console.firebase.google.com
+2. Enable Email/Password and Phone authentication
+3. Download `google-services.json` (Android) and `GoogleService-Info.plist` (iOS)
+4. Configure app with Firebase credentials
+
+```javascript
+// firebaseConfig.js
+import { initializeApp } from '@react-native-firebase/app';
+import auth from '@react-native-firebase/auth';
+
+const firebaseConfig = {
+  apiKey: process.env.FIREBASE_API_KEY,
+  authDomain: process.env.FIREBASE_AUTH_DOMAIN,
+  projectId: process.env.FIREBASE_PROJECT_ID,
+  storageBucket: process.env.FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID,
+  appId: process.env.FIREBASE_APP_ID,
+};
+
+if (!auth().app) {
+  initializeApp(firebaseConfig);
+}
+
+export { auth };
+```
+
+---
+
+### 2.2 Database Schema Design
+
+#### PostgreSQL Schema
+```sql
+-- Users table (stores profile data, not auth credentials)
+CREATE TABLE users (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  firebase_uid VARCHAR(128) UNIQUE NOT NULL, -- Links to Firebase Auth
+  email VARCHAR(255) UNIQUE,
+  phone_number VARCHAR(20) UNIQUE,
+  full_name VARCHAR(255) NOT NULL,
+  age INTEGER CHECK (age >= 13 AND age <= 120),
+  gender VARCHAR(50),
+  nationality VARCHAR(100),
+  country_of_residence VARCHAR(100),
+  city VARCHAR(100),
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  email_verified BOOLEAN DEFAULT FALSE,
+  phone_verified BOOLEAN DEFAULT FALSE,
+  onboarding_completed BOOLEAN DEFAULT FALSE,
+  account_status VARCHAR(20) DEFAULT 'active', -- active, suspended, deleted
+  CONSTRAINT check_contact_info CHECK (email IS NOT NULL OR phone_number IS NOT NULL)
+);
+
+-- User interests/preferences
+CREATE TABLE user_interests (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  interest_category VARCHAR(100), -- e.g., "children's welfare", "medical aid"
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_users_firebase_uid ON users(firebase_uid);
+CREATE INDEX idx_users_email ON users(email);
+CREATE INDEX idx_users_phone ON users(phone_number);
+CREATE INDEX idx_user_interests_user_id ON user_interests(user_id);
+
+-- Track authentication events for security
+CREATE TABLE auth_events (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  event_type VARCHAR(50), -- login, logout, password_reset, verification
+  ip_address INET,
+  user_agent TEXT,
+  success BOOLEAN,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+#### Prisma Schema (ORM)
+```prisma
+// prisma/schema.prisma
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id                   String         @id @default(uuid())
+  firebaseUid          String         @unique @map("firebase_uid")
+  email                String?        @unique
+  phoneNumber          String?        @unique @map("phone_number")
+  fullName             String         @map("full_name")
+  age                  Int?
+  gender               String?
+  nationality          String?
+  countryOfResidence   String?        @map("country_of_residence")
+  city                 String?
+  createdAt            DateTime       @default(now()) @map("created_at")
+  updatedAt            DateTime       @updatedAt @map("updated_at")
+  emailVerified        Boolean        @default(false) @map("email_verified")
+  phoneVerified        Boolean        @default(false) @map("phone_verified")
+  onboardingCompleted  Boolean        @default(false) @map("onboarding_completed")
+  accountStatus        String         @default("active") @map("account_status")
+  
+  interests            UserInterest[]
+  authEvents           AuthEvent[]
+
+  @@map("users")
+}
+
+model UserInterest {
+  id               String   @id @default(uuid())
+  userId           String   @map("user_id")
+  interestCategory String   @map("interest_category")
+  createdAt        DateTime @default(now()) @map("created_at")
+  
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("user_interests")
+}
+
+model AuthEvent {
+  id         String   @id @default(uuid())
+  userId     String   @map("user_id")
+  eventType  String   @map("event_type")
+  ipAddress  String?  @map("ip_address")
+  userAgent  String?  @map("user_agent")
+  success    Boolean
+  createdAt  DateTime @default(now()) @map("created_at")
+  
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("auth_events")
+}
+```
+
+---
+
+### 2.3 Frontend Implementation
+
+#### Screen Flow Structure
+```
+screens/
+├── auth/
+│   ├── LoginScreen.js
+│   ├── SignUpScreen.js
+│   └── VerificationScreen.js
+├── onboarding/
+│   └── InterestsScreen.js
+└── main/
+    └── HomeScreen.js
+```
+
+#### 2.3.1 Navigation Setup
+```javascript
+// navigation/AuthNavigator.js
+import React from 'react';
+import { createStackNavigator } from '@react-navigation/stack';
+import LoginScreen from '../screens/auth/LoginScreen';
+import SignUpScreen from '../screens/auth/SignUpScreen';
+import VerificationScreen from '../screens/auth/VerificationScreen';
+import InterestsScreen from '../screens/onboarding/InterestsScreen';
+
+const Stack = createStackNavigator();
+
+export default function AuthNavigator() {
+  return (
+    <Stack.Navigator screenOptions={{ headerShown: false }}>
+      <Stack.Screen name="Login" component={LoginScreen} />
+      <Stack.Screen name="SignUp" component={SignUpScreen} />
+      <Stack.Screen name="Verification" component={VerificationScreen} />
+      <Stack.Screen name="Interests" component={InterestsScreen} />
+    </Stack.Navigator>
+  );
+}
+```
+
+#### 2.3.2 Login Screen
+```javascript
+// screens/auth/LoginScreen.js
+import React, { useState } from 'react';
+import { View, StyleSheet, KeyboardAvoidingView, Platform } from 'react-native';
+import { TextInput, Button, Text, HelperText } from 'react-native-paper';
+import { useForm, Controller } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { z } from 'zod';
+import auth from '@react-native-firebase/auth';
+
+// Validation schema
+const loginSchema = z.object({
+  emailOrPhone: z.string().min(1, 'Email or phone number is required'),
+  password: z.string().min(6, 'Password must be at least 6 characters'),
+});
+
+export default function LoginScreen({ navigation }) {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const { control, handleSubmit, formState: { errors } } = useForm({
+    resolver: zodResolver(loginSchema),
+    defaultValues: {
+      emailOrPhone: '',
+      password: '',
+    },
+  });
+
+  const isEmail = (text) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text);
+
+  const onSubmit = async (data) => {
+    setLoading(true);
+    setError('');
+
+    try {
+      const { emailOrPhone, password } = data;
+
+      if (isEmail(emailOrPhone)) {
+        // Email login
+        await auth().signInWithEmailAndPassword(emailOrPhone, password);
+      } else {
+        // Phone login - requires phone number in E.164 format
+        // Note: Phone auth with password requires custom implementation
+        // Firebase phone auth uses OTP by default
+        setError('Phone number login requires verification code');
+        return;
+      }
+
+      // Navigation handled by auth state listener in App.js
+    } catch (err) {
+      console.error('Login error:', err);
+      setError(err.message || 'Login failed. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <KeyboardAvoidingView 
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+    >
+      <View style={styles.content}>
+        <Text variant="headlineLarge" style={styles.title}>
+          Welcome Back
+        </Text>
+        
+        <Controller
+          control={control}
+          name="emailOrPhone"
+          render={({ field: { onChange, onBlur, value } }) => (
+            <TextInput
+              label="Email or Phone Number"
+              mode="outlined"
+              value={value}
+              onChangeText={onChange}
+              onBlur={onBlur}
+              autoCapitalize="none"
+              keyboardType="email-address"
+              error={!!errors.emailOrPhone}
+              style={styles.input}
+            />
+          )}
+        />
+        {errors.emailOrPhone && (
+          <HelperText type="error">{errors.emailOrPhone.message}</HelperText>
+        )}
+
+        <Controller
+          control={control}
+          name="password"
+          render={({ field: { onChange, onBlur, value } }) => (
+            <TextInput
+              label="Password"
+              mode="outlined"
+              value={value}
+              onChangeText={onChange}
+              onBlur={onBlur}
+              secureTextEntry
+              error={!!errors.password}
+              style={styles.input}
+            />
+          )}
+        />
+        {errors.password && (
+          <HelperText type="error">{errors.password.message}</HelperText>
+        )}
+
+        {error ? <HelperText type="error">{error}</HelperText> : null}
+
+        <Button
+          mode="contained"
+          onPress={handleSubmit(onSubmit)}
+          loading={loading}
+          disabled={loading}
+          style={styles.button}
+        >
+          Sign In
+        </Button>
+
+        <Button
+          mode="text"
+          onPress={() => navigation.navigate('SignUp')}
+          style={styles.linkButton}
+        >
+          Don't have an account? Sign Up
+        </Button>
+      </View>
+    </KeyboardAvoidingView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#fff',
+  },
+  content: {
+    flex: 1,
+    padding: 20,
+    justifyContent: 'center',
+  },
+  title: {
+    textAlign: 'center',
+    marginBottom: 40,
+  },
+  input: {
+    marginBottom: 10,
+  },
+  button: {
+    marginTop: 20,
+    paddingVertical: 8,
+  },
+  linkButton: {
+    marginTop: 10,
+  },
+});
+```
+
+#### 2.3.3 Sign Up Screen
+```javascript
+// screens/auth/SignUpScreen.js
+import React, { useState } from 'react';
+import { View, StyleSheet, ScrollView, KeyboardAvoidingView, Platform } from 'react-native';
+import { TextInput, Button, Text, HelperText, RadioButton, Chip } from 'react-native-paper';
+import { useForm, Controller } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { z } from 'zod';
+import auth from '@react-native-firebase/auth';
+import { Picker } from '@react-native-picker/picker';
+
+// Validation schema
+const signUpSchema = z.object({
+  email: z.string().email('Invalid email address').optional().or(z.literal('')),
+  phoneNumber: z.string().optional(),
+  password: z.string().min(8, 'Password must be at least 8 characters')
+    .regex(/[A-Z]/, 'Password must contain at least one uppercase letter')
+    .regex(/[a-z]/, 'Password must contain at least one lowercase letter')
+    .regex(/[0-9]/, 'Password must contain at least one number'),
+  confirmPassword: z.string(),
+  fullName: z.string().min(2, 'Name must be at least 2 characters'),
+  age: z.number().min(13, 'Must be at least 13 years old').max(120),
+  gender: z.string().optional(),
+  nationality: z.string().min(2, 'Nationality is required'),
+  countryOfResidence: z.string().min(2, 'Country of residence is required'),
+}).refine((data) => data.email || data.phoneNumber, {
+  message: "Either email or phone number is required",
+  path: ["email"],
+}).refine((data) => data.password === data.confirmPassword, {
+  message: "Passwords don't match",
+  path: ["confirmPassword"],
+});
+
+const HUMANITARIAN_INTERESTS = [
+  "Children's Welfare",
+  "Women's Rights",
+  "Medical Aid",
+  "Food Security",
+  "Education",
+  "Refugee Support",
+  "Clean Water",
+  "Shelter & Housing",
+  "Mental Health",
+  "Emergency Relief",
+];
+
+export default function SignUpScreen({ navigation }) {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [selectedInterests, setSelectedInterests] = useState([]);
+  const [authMethod, setAuthMethod] = useState('email'); // 'email' or 'phone'
+
+  const { control, handleSubmit, formState: { errors }, watch } = useForm({
+    resolver: zodResolver(signUpSchema),
+    defaultValues: {
+      email: '',
+      phoneNumber: '',
+      password: '',
+      confirmPassword: '',
+      fullName: '',
+      age: '',
+      gender: '',
+      nationality: '',
+      countryOfResidence: '',
+    },
+  });
+
+  const toggleInterest = (interest) => {
+    setSelectedInterests(prev => 
+      prev.includes(interest) 
+        ? prev.filter(i => i !== interest)
+        : [...prev, interest]
+    );
+  };
+
+  const onSubmit = async (data) => {
+    if (selectedInterests.length === 0) {
+      setError('Please select at least one humanitarian interest');
+      return;
+    }
+
+    setLoading(true);
+    setError('');
+
+    try {
+      let userCredential;
+
+      if (authMethod === 'email') {
+        // Create user with email
+        userCredential = await auth().createUserWithEmailAndPassword(
+          data.email,
+          data.password
+        );
+
+        // Send verification email
+        await userCredential.user.sendEmailVerification();
+      } else {
+        // Phone authentication requires phone number in E.164 format
+        // This will send an SMS verification code
+        // Note: This is a simplified version - full implementation below
+        const confirmation = await auth().signInWithPhoneNumber(data.phoneNumber);
+        
+        // Store user data and navigate to verification
+        navigation.navigate('Verification', {
+          confirmation,
+          userData: { ...data, interests: selectedInterests },
+          authMethod: 'phone',
+        });
+        return;
+      }
+
+      // Store additional user data in your backend
+      const token = await userCredential.user.getIdToken();
+      await fetch(`${process.env.API_URL}/api/users`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          firebaseUid: userCredential.user.uid,
+          email: data.email,
+          phoneNumber: data.phoneNumber,
+          fullName: data.fullName,
+          age: parseInt(data.age),
+          gender: data.gender,
+          nationality: data.nationality,
+          countryOfResidence: data.countryOfResidence,
+          interests: selectedInterests,
+        }),
+      });
+
+      // Navigate to verification screen
+      navigation.navigate('Verification', {
+        userId: userCredential.user.uid,
+        authMethod: 'email',
+      });
+
+    } catch (err) {
+      console.error('Sign up error:', err);
+      setError(err.message || 'Sign up failed. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <KeyboardAvoidingView 
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+    >
+      <ScrollView contentContainerStyle={styles.scrollContent}>
+        <Text variant="headlineLarge" style={styles.title}>
+          Create Account
+        </Text>
+
+        {/* Auth Method Selection */}
+        <RadioButton.Group onValueChange={setAuthMethod} value={authMethod}>
+          <View style={styles.radioGroup}>
+            <RadioButton.Item label="Sign up with Email" value="email" />
+            <RadioButton.Item label="Sign up with Phone" value="phone" />
+          </View>
+        </RadioButton.Group>
+
+        {/* Email/Phone Input */}
+        {authMethod === 'email' ? (
+          <Controller
+            control={control}
+            name="email"
+            render={({ field: { onChange, onBlur, value } }) => (
+              <TextInput
+                label="Email *"
+                mode="outlined"
+                value={value}
+                onChangeText={onChange}
+                onBlur={onBlur}
+                autoCapitalize="none"
+                keyboardType="email-address"
+                error={!!errors.email}
+                style={styles.input}
+              />
+            )}
+          />
+        ) : (
+          <Controller
+            control={control}
+            name="phoneNumber"
+            render={({ field: { onChange, onBlur, value } }) => (
+              <TextInput
+                label="Phone Number (with country code) *"
+                mode="outlined"
+                value={value}
+                onChangeText={onChange}
+                onBlur={onBlur}
+                keyboardType="phone-pad"
+                placeholder="+1234567890"
+                error={!!errors.phoneNumber}
+                style={styles.input}
+              />
+            )}
+          />
+        )}
+        {(errors.email || errors.phoneNumber) && (
+          <HelperText type="error">
+            {errors.email?.message || errors.phoneNumber?.message}
+          </HelperText>
+        )}
+
+        {/* Password Fields */}
+        <Controller
+          control={control}
+          name="password"
+          render={({ field: { onChange, onBlur, value } }) => (
+            <TextInput
+              label="Password *"
+              mode="outlined"
+              value={value}
+              onChangeText={onChange}
+              onBlur={onBlur}
+              secureTextEntry
+              error={!!errors.password}
+              style={styles.input}
+            />
+          )}
+        />
+        {errors.password && (
+          <HelperText type="error">{errors.password.message}</HelperText>
+        )}
+
+        <Controller
+          control={control}
+          name="confirmPassword"
+          render={({ field: { onChange, onBlur, value } }) => (
+            <TextInput
+              label="Confirm Password *"
+              mode="outlined"
+              value={value}
+              onChangeText={onChange}
+              onBlur={onBlur}
+              secureTextEntry
+              error={!!errors.confirmPassword}
+              style={styles.input}
+            />
+          )}
+        />
+        {errors.confirmPassword && (
+          <HelperText type="error">{errors.confirmPassword.message}</HelperText>
+        )}
+
+        {/* Personal Information */}
+        <Text variant="titleMedium" style={styles.sectionTitle}>
+          Personal Information
+        </Text>
+
+        <Controller
+          control={control}
+          name="fullName"
+          render={({ field: { onChange, onBlur, value } }) => (
+            <TextInput
+              label="Full Name *"
+              mode="outlined"
+              value={value}
+              onChangeText={onChange}
+              onBlur={onBlur}
+              error={!!errors.fullName}
+              style={styles.input}
+            />
+          )}
+        />
+        {errors.fullName && (
+          <HelperText type="error">{errors.fullName.message}</HelperText>
+        )}
+
+        <Controller
+          control={control}
+          name="age"
+          render={({ field: { onChange, onBlur, value } }) => (
+            <TextInput
+              label="Age *"
+              mode="outlined"
+              value={value}
+              onChangeText={(text) => onChange(text ? parseInt(text) : '')}
+              onBlur={onBlur}
+              keyboardType="number-pad"
+              error={!!errors.age}
+              style={styles.input}
+            />
+          )}
+        />
+        {errors.age && (
+          <HelperText type="error">{errors.age.message}</HelperText>
+        )}
+
+        <Controller
+          control={control}
+          name="gender"
+          render={({ field: { onChange, value } }) => (
+            <View style={styles.pickerContainer}>
+              <Text style={styles.pickerLabel}>Gender (Optional)</Text>
+              <Picker
+                selectedValue={value}
+                onValueChange={onChange}
+                style={styles.picker}
+              >
+                <Picker.Item label="Select..." value="" />
+                <Picker.Item label="Male" value="male" />
+                <Picker.Item label="Female" value="female" />
+                <Picker.Item label="Non-binary" value="non-binary" />
+                <Picker.Item label="Prefer not to say" value="not_specified" />
+              </Picker>
+            </View>
+          )}
+        />
+
+        <Controller
+          control={control}
+          name="nationality"
+          render={({ field: { onChange, onBlur, value } }) => (
+            <TextInput
+              label="Nationality *"
+              mode="outlined"
+              value={value}
+              onChangeText={onChange}
+              onBlur={onBlur}
+              error={!!errors.nationality}
+              style={styles.input}
+            />
+          )}
+        />
+        {errors.nationality && (
+          <HelperText type="error">{errors.nationality.message}</HelperText>
+        )}
+
+        <Controller
+          control={control}
+          name="countryOfResidence"
+          render={({ field: { onChange, onBlur, value } }) => (
+            <TextInput
+              label="Country of Residence *"
+              mode="outlined"
+              value={value}
+              onChangeText={onChange}
+              onBlur={onBlur}
+              error={!!errors.countryOfResidence}
+              style={styles.input}
+            />
+          )}
+        />
+        {errors.countryOfResidence && (
+          <HelperText type="error">{errors.countryOfResidence.message}</HelperText>
+        )}
+
+        {/* Humanitarian Interests */}
+        <Text variant="titleMedium" style={styles.sectionTitle}>
+          Humanitarian Interests *
+        </Text>
+        <Text variant="bodySmall" style={styles.helperText}>
+          Select causes you care about
+        </Text>
+
+        <View style={styles.chipsContainer}>
+          {HUMANITARIAN_INTERESTS.map((interest) => (
+            <Chip
+              key={interest}
+              selected={selectedInterests.includes(interest)}
+              onPress={() => toggleInterest(interest)}
+              style={styles.chip}
+            >
+              {interest}
+            </Chip>
+          ))}
+        </View>
+
+        {error ? <HelperText type="error">{error}</HelperText> : null}
+
+        <Button
+          mode="contained"
+          onPress={handleSubmit(onSubmit)}
+          loading={loading}
+          disabled={loading}
+          style={styles.button}
+        >
+          Create Account
+        </Button>
+
+        <Button
+          mode="text"
+          onPress={() => navigation.navigate('Login')}
+          style={styles.linkButton}
+        >
+          Already have an account? Sign In
+        </Button>
+      </ScrollView>
+    </KeyboardAvoidingView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#fff',
+  },
+  scrollContent: {
+    padding: 20,
+  },
+  title: {
+    textAlign: 'center',
+    marginBottom: 20,
+    marginTop: 20,
+  },
+  radioGroup: {
+    marginBottom: 15,
+  },
+  input: {
+    marginBottom: 10,
+  },
+  sectionTitle: {
+    marginTop: 20,
+    marginBottom: 10,
+  },
+  pickerContainer: {
+    marginBottom: 15,
+  },
+  pickerLabel: {
+    fontSize: 14,
+    color: '#666',
+    marginBottom: 5,
+  },
+  picker: {
+    borderWidth: 1,
+    borderColor: '#ccc',
+    borderRadius: 4,
+  },
+  helperText: {
+    color: '#666',
+    marginBottom: 10,
+  },
+  chipsContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginTop: 10,
+    marginBottom: 20,
+  },
+  chip: {
+    margin: 4,
+  },
+  button: {
+    marginTop: 20,
+    paddingVertical: 8,
+  },
+  linkButton: {
+    marginTop: 10,
+    marginBottom: 20,
+  },
+});
+```
+
+#### 2.3.4 Verification Screen
+```javascript
+// screens/auth/VerificationScreen.js
+import React, { useState, useEffect } from 'react';
+import { View, StyleSheet } from 'react-native';
+import { TextInput, Button, Text, HelperText } from 'react-native-paper';
+import auth from '@react-native-firebase/auth';
+
+export default function VerificationScreen({ route, navigation }) {
+  const { userId, authMethod, confirmation, userData } = route.params;
+  const [code, setCode] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [resendDisabled, setResendDisabled] = useState(false);
+  const [countdown, setCountdown] = useState(0);
+
+  useEffect(() => {
+    if (countdown > 0) {
+      const timer = setTimeout(() => setCountdown(countdown - 1), 1000);
+      return () => clearTimeout(timer);
+    } else {
+      setResendDisabled(false);
+    }
+  }, [countdown]);
+
+  const verifyCode = async () => {
+    setLoading(true);
+    setError('');
+
+    try {
+      if (authMethod === 'email') {
+        // Email verification is handled automatically by Firebase
+        // Just check if the user reloaded and verified
+        const user = auth().currentUser;
+        await user.reload();
+        
+        if (user.emailVerified) {
+          // Update backend
+          const token = await user.getIdToken();
+          await fetch(`${process.env.API_URL}/api/users/${userId}/verify-email`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+            },
+          });
+          
+          navigation.reset({
+            index: 0,
+            routes: [{ name: 'Interests' }],
+          });
+        } else {
+          setError('Please verify your email first. Check your inbox.');
+        }
+      } else {
+        // Phone verification
+        await confirmation.confirm(code);
+        
+        // Create user profile in backend
+        const user = auth().currentUser;
+        const token = await user.getIdToken();
+        
+        await fetch(`${process.env.API_URL}/api/users`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            firebaseUid: user.uid,
+            ...userData,
+          }),
+        });
+
+        navigation.reset({
+          index: 0,
+          routes: [{ name: 'Interests' }],
+        });
+      }
+    } catch (err) {
+      console.error('Verification error:', err);
+      setError(err.message || 'Verification failed. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const resendCode = async () => {
+    setResendDisabled(true);
+    setCountdown(60);
+
+    try {
+      if (authMethod === 'email') {
+        const user = auth().currentUser;
+        await user.sendEmailVerification();
+        setError('Verification email sent! Please check your inbox.');
+      } else {
+        // Resend SMS
+        const newConfirmation = await auth().signInWithPhoneNumber(
+          userData.phoneNumber
+        );
+        route.params.confirmation = newConfirmation;
+        setError('Verification code sent!');
+      }
+    } catch (err) {
+      console.error('Resend error:', err);
+      setError(err.message || 'Failed to resend code.');
+    }
+  };
+
+  return (
+    <View style={styles.container}>
+      <Text variant="headlineLarge" style={styles.title}>
+        Verify Your {authMethod === 'email' ? 'Email' : 'Phone'}
+      </Text>
+
+      <Text variant="bodyMedium" style={styles.instructions}>
+        {authMethod === 'email'
+          ? '
